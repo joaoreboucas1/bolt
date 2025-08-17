@@ -9,6 +9,9 @@
 #include <string.h>
 #include <math.h>
 
+#include <gsl/gsl_odeiv2.h>
+#include <gsl/gsl_errno.h>
+
 #define c_in_km_s 299792.458
 #define w_gamma 1.0/3.0
 #define w_m 0.0
@@ -105,7 +108,16 @@ Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
     };
 }
 
-Perturbations dy_da(Cosmo c, Perturbations y, double a, double k) {
+typedef struct {
+    Cosmo c;
+    double k;
+} ODE_Params;
+
+// int deriv(double t, const double y[], double dydt[], void *Params) {
+int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
+    ODE_Params ode_params = *(ODE_Params*) params;
+    const Cosmo c = ode_params.c;
+    const double k = ode_params.k;
     const double k2 = pow(k, 2.0);
     const double H = H_curly(c, a);
     const double rho_m_now = rho_m(c, a);
@@ -118,34 +130,26 @@ Perturbations dy_da(Cosmo c, Perturbations y, double a, double k) {
     const double delta_gamma_prime = -4.0*y.theta_gamma/3.0 + 4.0*Phi_prime;
     const double theta_gamma_prime = k2*(y.delta_gamma/4.0 - sigma_gamma) + k2*y.Phi;
 
-    Perturbations p = (Perturbations) {
+     *y_prime = (Perturbations) {
         .delta_c = delta_c_prime,
         .theta_c = theta_c_prime,
         .delta_gamma = delta_gamma_prime,
         .theta_gamma = theta_gamma_prime,
         .Phi = Phi_prime
     };
-    Perturbations_Scale(&p, 1.0/(a*H));
-    return p;
+    Perturbations_Scale(y_prime, 1.0/(a*H));
+    return GSL_SUCCESS;
 }
 
-Perturbations dy_dloga(Cosmo c, Perturbations y, double loga, double k) {
+int dy_dloga(double loga, Perturbations y, Perturbations *y_prime, void *params) {
     const double a = exp(loga);
-    Perturbations y_prime = dy_da(c, y, a, k);
-    Perturbations_Scale(&y_prime, a);
-    return y_prime;
+    dy_da(a, y, y_prime, params);
+    Perturbations_Scale(y_prime, a);
+    return GSL_SUCCESS;
 }
 
-// odeint(dy_dloga, y, loga_int, k);
-void odeint(Cosmo c, Perturbations f(Cosmo c, Perturbations y, double loga, double k), Perturbations *y, double *loga_int, double k) {
-    Perturbations y_now, y_prime;
-    const double dloga_int = loga_int[2] - loga_int[1];
-    for (int i = 0; i < timesteps; i++) {
-        y_now = y[i];
-        y_prime = f(c, y_now, loga_int[i], k);
-        Perturbations_Scale(&y_prime, dloga_int);
-        y[i+1] = Perturbations_Add(y_now, y_prime);
-    }
+int dy_dloga_gsl(double loga, const double y[], double y_prime[], void *params) {
+    return dy_dloga(loga, *(Perturbations*)y, (Perturbations*)y_prime, params);
 }
 
 typedef struct {
@@ -154,7 +158,46 @@ typedef struct {
     int timesteps;
 } Result;
 
-Result integrate(Cosmo c, double k) {
+// odeint(dy_dloga, y, loga_int, k);
+Result odeint(Cosmo c, Perturbations y_ini, double loga_ini, double k) {
+    const double dloga_int = -loga_ini/timesteps;
+    ODE_Params params = (ODE_Params) {
+        .c = c,
+        .k = k
+    };
+    gsl_odeiv2_system sys = {
+        .function = dy_dloga_gsl,
+        .jacobian = NULL,
+        .dimension = 5,
+        .params = (void*)&params
+    };
+    const double hstart = 1e-3;
+    const double epsabs = 1e-3;
+    const double epsrel = 0.0;
+    gsl_odeiv2_driver *driver = gsl_odeiv2_driver_alloc_y_new(&sys, gsl_odeiv2_step_rkf45, hstart, epsabs, epsrel);
+
+    const int n_data = timesteps + 1;
+    Perturbations *y = malloc(n_data*sizeof(Perturbations));
+    double *a_int = malloc(n_data*sizeof(double));
+    if (a_int == NULL) {
+        printf("ERROR: could not allocate memory for integration\n");
+        exit(1);
+    }
+    Perturbations state = y_ini;
+    y[0] = state;
+
+    double loga = loga_ini;
+    a_int[0] = exp(loga);
+    for (int i = 0; i < timesteps; i++) {
+        const double loga_next = loga_ini + (i+1)*dloga_int;
+        gsl_odeiv2_driver_apply(driver, &loga, loga_next, (double*)&state);
+        y[i + 1] = state;
+        a_int[i + 1] = exp(loga);
+    }
+    return (Result) {.a = a_int, .y = y, .timesteps = timesteps};
+}
+
+Result solve_einstein_boltzmann(Cosmo c, double k) {
     // Initial conditions
     const double tau_ini = 3e-4;
     const double a_ini = c.H0*sqrt(c.Omega_r)*tau_ini + pow(c.H0,2.0)*c.Omega_m*pow(tau_ini,2.0)/4.0;
@@ -172,25 +215,6 @@ Result integrate(Cosmo c, double k) {
         .delta_c = delta_c_ini,
         .theta_c = theta_c_ini,
     };
-    
-    const int n_data = timesteps + 1;
-    Perturbations *y = malloc(n_data*sizeof(Perturbations));
-    double *a_int = malloc(n_data*sizeof(double));
-    if (y == NULL || a_int == NULL) {
-        printf("ERROR: could not allocate memory for integration\n");
-        exit(1);
-    }
 
-    y[0] = y_ini;
-
-    // Defining scale factor grid for integration
-    double loga_int[n_data];
-    const double dloga_int = -log(a_ini)/timesteps;
-    for (int i = 0; i < n_data; i++) {
-        loga_int[i] = log(a_ini) + i*dloga_int;
-        a_int[i] = exp(loga_int[i]);
-    }
-    odeint(c, dy_dloga, y, loga_int, k);
-
-    return (Result) {.y = y, .a = a_int, .timesteps=timesteps};
+    return odeint(c, y_ini, log(a_ini), k);
 }

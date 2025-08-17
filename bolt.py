@@ -10,6 +10,9 @@ import numpy as np
 
 libbolt = ctypes.CDLL("./libbolt.so")
 
+def InitCosmo(h, Omega_m):
+    return libbolt.InitCosmo(h, Omega_m)
+
 class Cosmo(ctypes.Structure):
     _fields_ = [
         ("h", ctypes.c_double),
@@ -75,18 +78,18 @@ class Result(ctypes.Structure):
 
     def as_arrays(self):
         a = np.ctypeslib.as_array(self.a, shape=(self.timesteps+1,))
-        y = np.ctypeslib.as_array(self.y, shape=(self.timesteps+1,))
+        y = np.ctypeslib.as_array(self.y, shape=(self.timesteps+1))
         return a, y
 
-# Perturbations dy_dloga(Cosmo c, Perturbations y, double loga, double k)
-def dy_dloga(c: Cosmo, y: Perturbations, loga: float, k: float) -> Perturbations:
-    return libbolt.dy_dloga(c, y, loga, k)
+# int dy_dloga(double loga, Perturbations y, Perturbations *y_prime, void *params) {
+
+def solve_einstein_boltzmann(c: Cosmo, k: float) -> Result:
+    return libbolt.solve_einstein_boltzmann(c, k)
 
 def integrate(c: Cosmo, k: float) -> Result:
-    loga_int = np.linspace(np.log(a_ini), np.log(1), 4000)
-    a = np.exp(loga_int)
-    result = odeint(dy_dloga, y0, t=loga_int, args=(c, k))
-    return libbolt.integrate(c, k)
+    # Just for backwards compatibility
+    return solve_einstein_boltzmann(c, k)
+
 
 libbolt.rho_m.argtypes = (Cosmo, ctypes.c_double)
 libbolt.rho_m.restype = ctypes.c_double
@@ -106,17 +109,14 @@ libbolt.InitCosmo.argtypes = [ctypes.c_double, ctypes.c_double]
 libbolt.InitCosmo.restype = Cosmo
 libbolt.dy_dloga.argtypes = [Cosmo, Perturbations, ctypes.c_double, ctypes.c_double]
 libbolt.dy_dloga.restype = Perturbations
-libbolt.integrate.argtypes = [Cosmo, ctypes.c_double]
-libbolt.integrate.restype = Result
-
-def InitCosmo(h, Omega_m):
-    return libbolt.InitCosmo(h, Omega_m)
+libbolt.solve_einstein_boltzmann.argtypes = [Cosmo, ctypes.c_double]
+libbolt.solve_einstein_boltzmann.restype = Result
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
     c = libbolt.InitCosmo(0.7, 0.3)
     k = 0.01
-    r = libbolt.integrate(c, 0.01)
+    r = libbolt.solve_einstein_boltzmann(c, 0.01)
     delta_c = [r.y[i].delta_c for i in range(r.timesteps)]
     a = np.array([r.a[i] for i in range(r.timesteps)])
     plt.loglog(a, np.abs(delta_c))
