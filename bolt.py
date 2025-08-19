@@ -78,7 +78,7 @@ class Result(ctypes.Structure):
 
     def as_arrays(self):
         a = np.ctypeslib.as_array(self.a, shape=(self.timesteps+1,))
-        y = np.ctypeslib.as_array(self.y, shape=(self.timesteps+1))
+        y = np.ctypeslib.as_array(self.y, shape=(self.timesteps+1,))
         return a, y
 
 # int dy_dloga(double loga, Perturbations y, Perturbations *y_prime, void *params) {
