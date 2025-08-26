@@ -1,0 +1,4 @@
+# Remarks about numerical solutions of Einstein-Boltzmann
+
+1. The results really depend on the numerical algorithm that you are using. I suppose I'm using Newtonian gauge, and maybe if I used the synchronous, it wouldn't be as bad. Nevertheless, I tried to implement these equation in Python using thhe SciPy library without success, but GSL's `gsl_odeiv2` worked like a charm.
+2. The equation is solved in terms of $\log(a)$. However, we implement `dy_da` and `dy_dloga` just rescales the result of `dy_da` by `a`. This may be unefficient, as `dy_da` already scales the equations by `1/(a*H)`. However, I tested using `dy_dloga` directly and it was numerically unstable. I suppose `a*H` is a good combination for doing division.

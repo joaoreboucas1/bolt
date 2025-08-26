@@ -4,17 +4,19 @@
     Licence: MIT, see `LICENSE` file
 """
 
+import os
 import ctypes
 from typing import *
 import numpy as np
 
-# TODO: make Bolt installable
 path = "/".join(__file__.split("/")[:-1])
-libbolt = ctypes.CDLL(f"{path}/libbolt.so")
+if not os.path.exists(f"{path}/build/libbolt.so"):
+    raise ImportError(f"Bolt tried to look for `libbolt.so` at `{path}/libbolt.so`, but it does not exist.")
 
-# TODO: use this as `Cosmo` initializer
-def InitCosmo(h, Omega_m):
-    return libbolt.InitCosmo(h, Omega_m)
+try:
+    libbolt = ctypes.CDLL(f"{path}/build/libbolt.so")
+except OSError as e:
+    raise ImportError(f"Bolt tried to load `libbolt.so`, but we got an error: \n{e}\n. Make sure compilation went fine; otherwise, you can create an issue in Github.")
 
 class Cosmo(ctypes.Structure):
     _fields_ = [
@@ -28,8 +30,7 @@ class Cosmo(ctypes.Structure):
     ]
 
     def __init__(self, h: float, Omega_m: float) -> Self:
-        # FIX: not working
-        self = libbolt.InitCosmo(h, Omega_m)
+        libbolt.InitCosmo(ctypes.byref(self), h, Omega_m)
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}: \n" + f"  - h = {self.h:.4f}\n" + f"  - Omega_m = {self.Omega_m:.4f}"
@@ -80,10 +81,12 @@ class Result(ctypes.Structure):
         ("timesteps", ctypes.c_int),
     ]
 
-    def as_arrays(self):
+    def as_np_arrays(self):
         a = np.ctypeslib.as_array(self.a, shape=(self.timesteps+1,))
-        y = np.ctypeslib.as_array(self.y, shape=(self.timesteps+1,))
+        # TODO: this is not the most efficient way of constructing this array
+        y = np.array([self.y[i].as_np_array() for i in range(self.timesteps+1)])
         return a, y
+
 
 def solve_einstein_boltzmann(c: Cosmo, k: float) -> Result:
     return libbolt.solve_einstein_boltzmann(c, k)
@@ -107,8 +110,7 @@ libbolt.H_curly.argtypes = (Cosmo, ctypes.c_double)
 libbolt.H_curly.restype = ctypes.c_double
 libbolt.scale_factor_horizon_entry.argtypes = (Cosmo, ctypes.c_double)
 libbolt.scale_factor_horizon_entry.restype = ctypes.c_double
-libbolt.InitCosmo.argtypes = [ctypes.c_double, ctypes.c_double]
-libbolt.InitCosmo.restype = Cosmo
+libbolt.InitCosmo.argtypes = [ctypes.POINTER(Cosmo), ctypes.c_double, ctypes.c_double]
 # TODO: interface dy_da
 # libbolt.dy_dloga.argtypes = [Cosmo, Perturbations, ctypes.c_double, ctypes.c_double]
 # libbolt.dy_dloga.restype = Perturbations

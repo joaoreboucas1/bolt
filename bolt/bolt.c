@@ -30,10 +30,10 @@ typedef struct {
     double a_eq;
 } Cosmo;
 
-Cosmo InitCosmo(double h, double Omega_m) {
+void InitCosmo(Cosmo *c, double h, double Omega_m) {
     const double H0 = 100*h/c_in_km_s;
     const double Omega_r = 2.5e-5;
-    return (Cosmo) {
+    *c = (Cosmo) {
         .h = h,
         .Omega_m = Omega_m,
         .H0 = H0, // 1/Mpc
@@ -113,7 +113,7 @@ typedef struct {
     double k;
 } ODE_Params;
 
-// int deriv(double t, const double y[], double dydt[], void *Params) {
+// int deriv(double t, const double y[], double dydt[], void *Params)
 int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
     ODE_Params ode_params = *(ODE_Params*) params;
     const Cosmo c = ode_params.c;
@@ -151,6 +151,7 @@ int dy_dloga(double loga, Perturbations y, Perturbations *y_prime, void *params)
 int dy_dloga_gsl(double loga, const double y[], double y_prime[], void *params) {
     return dy_dloga(loga, *(Perturbations*)y, (Perturbations*)y_prime, params);
 }
+
 
 typedef struct {
     Perturbations *y;
