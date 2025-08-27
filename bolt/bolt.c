@@ -18,6 +18,7 @@
 #define w_Lambda -1.0
 const int timesteps = 3999;
 
+// TODO: maybe put a_int, As and ns here
 typedef struct {
     // Input parameters
     double h;
@@ -77,9 +78,34 @@ double scale_factor_horizon_entry(Cosmo c, double k) {
     // Find the value of `a` such that k = H_curly
     // Python implementation:
     // return np.exp(root_scalar(lambda loga: H_curly(np.exp(loga)) - k, x0=-15).root)
-    printf("scale_factor_horizon_entry: not implemented");
-    exit(1);
-    return 0.0;
+    double loga_low = log(1e-6);
+    double loga_hi  = log(1.0);
+    double loga_try, H_try;
+    double H_low = H_curly(c, exp(loga_low));
+    double H_hi = H_curly(c, exp(loga_hi));
+    double error = 1e6;
+    #define MAX_ITERS 20
+    #define THRESHOLD 1e-3
+    for (size_t i = 0; i < MAX_ITERS && abs(error) > THRESHOLD; i++) {
+        // H = a*loga + b
+        double slope = (H_hi - H_low)/(loga_hi - loga_low);
+        double intercept = H_hi - slope*loga_hi;
+        // k = a*loga + b
+        loga_try = (k - intercept)/slope;
+        H_try = H_curly(c, exp(loga_try));
+        error = (H_try - k)/k;
+        if (error > 0) {
+            loga_hi = loga_try;
+            H_hi = H_try;
+        } else {
+            loga_low = loga_try;
+            H_low = H_try;
+        }
+    }
+    if (abs(error) > THRESHOLD) {
+        printf("[WARNING] scale_factor_horizon_entry: could not find a scale factor a satisfying H_curly = k =  %f Mpc. Current solution is a = %f which has H_curly = %f\n", k, loga_try, H_try);
+    }
+    return 0.5*(loga_hi + loga_low);
 }
 
 typedef struct {
