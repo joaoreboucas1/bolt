@@ -18,6 +18,11 @@ try:
 except OSError as e:
     raise ImportError(f"Bolt tried to load `libbolt.so`, but we got an error: \n{e}\n. Make sure compilation went fine; otherwise, you can create an issue in Github.")
 
+with open(f"{path}/bolt.c", "r") as f:
+    for line in f.read().splitlines():
+        if line.startswith("const int timesteps"):
+            timesteps = int(line.split()[-1][:-1])
+
 class Cosmo(ctypes.Structure):
     _fields_ = [
         ("h", ctypes.c_double),
@@ -53,9 +58,6 @@ class Cosmo(ctypes.Structure):
     def H_curly(self, a: float) -> float:
         return libbolt.H_curly(self, a)
 
-    def scale_factor_horizon_entry(self, k: float) -> float:
-        return libbolt.scale_factor_horizon_entry(self, k)
-
 class Perturbations(ctypes.Structure):
     _fields_ = [
         ("delta_c", ctypes.c_double),
@@ -63,6 +65,7 @@ class Perturbations(ctypes.Structure):
         ("delta_gamma", ctypes.c_double),
         ("theta_gamma", ctypes.c_double),
         ("Phi", ctypes.c_double),
+        ("tau", ctypes.c_double),
     ]
 
     def as_np_array(self):
@@ -108,8 +111,6 @@ libbolt.P.argtypes = (Cosmo, ctypes.c_double)
 libbolt.P.restype = ctypes.c_double
 libbolt.H_curly.argtypes = (Cosmo, ctypes.c_double)
 libbolt.H_curly.restype = ctypes.c_double
-libbolt.scale_factor_horizon_entry.argtypes = (Cosmo, ctypes.c_double)
-libbolt.scale_factor_horizon_entry.restype = ctypes.c_double
 libbolt.InitCosmo.argtypes = [ctypes.POINTER(Cosmo), ctypes.c_double, ctypes.c_double]
 # TODO: interface dy_da
 # libbolt.dy_dloga.argtypes = [Cosmo, Perturbations, ctypes.c_double, ctypes.c_double]
