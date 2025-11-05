@@ -122,7 +122,6 @@ int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
     const double H = H_curly(c, a);
     const double rho_m_now = rho_m(c, a);
     const double rho_gamma_now = rho_gamma(c, a);
-    const double rho_nu_now = rho_nu(c, a);
     const double sigma_gamma = 0.0; // TODO: implement anisotropic stress, for now it's zero
     
     const double Phi_prime   = -H*y.Phi + 0.5*a2*(rho_m_now*y.theta_c + rho_gamma_now*(1.0 + w_gamma)*y.theta_gamma)/k2;
@@ -210,7 +209,6 @@ static_assert(sizeof(Perturbations) == 6*sizeof(double), "Exhaustive handling of
 Perturbations initial_conditions(Cosmo c, double k, double tau_ini) {
     (void) c;
     const double k2 = k*k;
-    const double tau2 = tau_ini*tau_ini;
     const double C = 1.0; // Arbitrary scale of adiabatic initial conditions
     const double Phi_ini = 4.0*C/3.0; // Primordial curvature perturbation
     const double delta_gamma_ini = -2.0*Phi_ini;
