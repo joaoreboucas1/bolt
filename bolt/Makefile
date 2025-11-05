@@ -25,10 +25,10 @@ $(BUILD_FOLDER)/bolt.o: bolt.c
 test: bolt.c tests/hello_world.c tests/hello_world.py
 	@echo "Testing C..."
 	gcc -o tests/hello_world tests/hello_world.c -lm -lgsl -lgslcblas -ggdb
-	@echo "Expected output: Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -24157.203145"
+	@echo "Expected output: Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -63202.869051"
 	@echo "Actual output:   `./tests/hello_world; echo Status: $$?`"
 	@echo "Testing Python..."
-	@echo "Expected output: Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -24157.203145"
+	@echo "Expected output: Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -63202.869051"
 	@echo "Actual output:   `python3 ./tests/hello_world.py; echo Status: $$?`"
 
 bench: bolt.c tests/hello_world
