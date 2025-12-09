@@ -34,7 +34,9 @@
 #define w_Lambda -1.0
 
 // Integration:
-//     - 
+//     - Integration is performed on $ln(a)$
+//     - We choose an initial conformal time $\tau_\mathrm{ini}$
+//     - We calculate the initial value of "a" using a radiation-dominated approximation (requires cosmological parameters)
 #define timesteps 999
 const double tau_ini = 3e-4;
 
@@ -112,6 +114,15 @@ double H_curly(Cosmo c, double a) {
     return a*sqrt(rho_tot(c, a)/3.0);
 }
 
+/*
+    `Background` is a type for the library's background tables.
+    The integration of perturbations requires the knowledge about several background functions.
+    The calculation of these functions requires a few floating-point operations, seen above.
+    The ultimate goal of the library is to calculate perturbation equations for several values of the Fourier wavenumber $k$.
+    We don't need to recalculate the background for each Fourier wavenumber, so we just do it once and save the results in background tables.
+    Then, we define interpolators.
+*/
+// 
 typedef struct {
     double loga[timesteps+1];
     double a[timesteps+1];

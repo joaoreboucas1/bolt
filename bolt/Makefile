@@ -27,9 +27,9 @@ test: bolt.c tests/hello_world.c tests/hello_world.py tests/distances.c tests/di
 	@echo "Compiling distances test..."
 	gcc -o tests/distances tests/distances.c -lm -lgsl -lgslcblas -ggdb 
 	@echo "Executing distances test..."
-	@echo "Expected output: z = 0.50, D_L = 2940.46 Mpc || z = 1.00, D_L = 6826.99 Mpc"
-	@echo "Actual output C :   `./tests/distances; echo Status: $$?`"
-	@echo "Actual output Py:   `python3 ./tests/distances.py; echo Status: $$?`"
+	@echo "Expected output:  z = 0.50, D_L = 2940.46 Mpc || z = 1.00, D_L = 6826.99 Mpc"
+	@echo "Actual output C : `./tests/distances; echo Status: $$?`"
+	@echo "Actual output Py: `python3 ./tests/distances.py; echo Status: $$?`"
 	
 	@echo "Compiling transfer function test..."
 	gcc -o tests/hello_world tests/hello_world.c -lm -lgsl -lgslcblas -ggdb
