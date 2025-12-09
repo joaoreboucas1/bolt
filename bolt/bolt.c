@@ -1,8 +1,8 @@
 /*
-    Bolt: a library for solving Einstein-Boltzmann system of linear cosmological perturbations
-    Author: João Rebouças, August 2025
-    Licence: MIT, see `LICENSE` file
-*/
+ *  Bolt: a library for solving Einstein-Boltzmann system of linear cosmological perturbations
+ *  Author: João Rebouças, August 2025
+ *  Licence: MIT, see `LICENSE` file
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,44 +11,82 @@
 #include <assert.h>
 
 #include <gsl/gsl_odeiv2.h>
+#include <gsl/gsl_integration.h>
+#include <gsl/gsl_spline.h>
 #include <gsl/gsl_errno.h>
 
+// -------------------- Constants --------------------
+
 #define c_in_km_s 299792.458
+
+/*   
+ *  Species:
+ *      - `gamma` refers to photons;
+ *      - `m` refers to matter (CDM + baryons);
+ *      - `Lambda` refers to the cosmological constant \Lambda;
+ *      - `w_<species>` refers to the equation of state of species <species>;
+ *      - `omega_<species>` refers to the current density parameter $ \Omega_i = \rho_i(z=0)/\rho_tot(z=0) $ of species <species>;
+ */
+
 #define omega_gammah2 2.473e-5 // From PDG 2020 astrophysical constants
 #define w_gamma 1.0/3.0
 #define w_m 0.0
 #define w_Lambda -1.0
-#define L_MAX_NU 100
-const int timesteps = 999;
 
-// TODO: maybe put a_int, As and ns here
+// Integration:
+//     - 
+#define timesteps 999
+const double tau_ini = 3e-4;
+
+// -------------------- Interface for engineering the cosmological model --------------------
+
 typedef struct {
     // Input parameters
     double h;
     double Omega_m;
-    // Derived parameters
+    double Omega_b;
+    double A_s;
+    double n_s;
+
+    // Derived parameters set by `InitCosmo`
     double Omega_Lambda;
+    double Omega_c;
     double H0;
     double rho_crit;
     double Omega_gamma;
     double a_eq;
 } Cosmo;
 
-void InitCosmo(Cosmo *c, double h, double Omega_m) {
+void InitCosmo(Cosmo *c, double h, double Omega_m, double Omega_b, double A_s, double n_s) {
     const double H0 = 100*h/c_in_km_s;
     const double Omega_gamma = omega_gammah2/h/h;
     *c = (Cosmo) {
+        // Input parameters
         .h = h,
         .Omega_m = Omega_m,
-        .H0 = H0, // 1/Mpc
+        .Omega_b = Omega_b,
+        .A_s = A_s,
+        .n_s = n_s,
+
+        // Derived parameters
+        .Omega_Lambda = 1.0 - Omega_m - Omega_gamma,
+        .Omega_c = Omega_m - Omega_b,
+        .H0 = H0,              // 1/Mpc
         .rho_crit = 3.0*H0*H0, // 1/Mpc^2
         .Omega_gamma = Omega_gamma,
-        .Omega_Lambda = 1.0 - Omega_m - Omega_gamma,
         .a_eq = Omega_gamma/Omega_m
     };
 }
 
-// Background densities
+// -------------------- Background functions --------------------
+
+/*
+ *  Quantities:
+ *      - `rho` is the energy density in units of 1/Mpc^2 (because 8*pi*G=1, see "Constants" section);
+ *      - `P` is the pressure in the same units (c = 1);
+ *      - `H_curly` is the conformal Hubble factor.
+ */
+
 double rho_m(Cosmo c, double a) {
     return c.rho_crit*c.Omega_m/a/a/a;
 }
@@ -73,6 +111,99 @@ double P(Cosmo c, double a) {
 double H_curly(Cosmo c, double a) {
     return a*sqrt(rho_tot(c, a)/3.0);
 }
+
+typedef struct {
+    double loga[timesteps+1];
+    double a[timesteps+1];
+    double luminosity_distances[timesteps+1];
+} Background;
+
+Background bg;
+gsl_interp *luminosity_distance_interpolator = NULL;
+
+double inverse_NormHubble_gsl_integration(double z, void* params) {
+    // NOTE: NormHubble = H(z)/H_0
+    Cosmo c = *(Cosmo*)params;
+    double a = 1/(1.0 + z);
+    double H = H_curly(c, a)/a;
+    return c.H0/H;
+}
+
+void calc_background(Cosmo *c) {
+    const double a_ini = c->H0*sqrt(c->Omega_gamma)*tau_ini + c->H0*c->H0*c->Omega_m*tau_ini*tau_ini/4.0;
+    bg.a[0] = a_ini;
+    bg.loga[0] = log(a_ini);
+    const double dloga_int = -bg.loga[0]/timesteps;
+    for (size_t i = 0; i < timesteps+1; ++i) {
+        bg.loga[i] = bg.loga[0] + i*dloga_int;
+        bg.a[i] = exp(bg.loga[i]);
+    }
+    
+    double integral;
+    bg.luminosity_distances[timesteps] = 0.0;
+    for (size_t i = 0; i < timesteps; i++) {
+        const double z = 1.0/bg.a[timesteps - i - 1] - 1.0;
+        gsl_integration_fixed_workspace *w = gsl_integration_fixed_alloc(
+            gsl_integration_fixed_legendre,
+            5, // Number of quadrature nodes
+            0.0,
+            z,
+            0.0, // NOTE: parameter `alpha` is ignored
+            0.0 //  NOTE: parameter `beta is ignored
+        );
+        gsl_function integrand;
+        integrand.function = &inverse_NormHubble_gsl_integration;
+        integrand.params = (void*)c;
+        int status = gsl_integration_fixed(&integrand, &integral, w);
+        if (status != GSL_SUCCESS) {
+            fprintf(stderr, "ERROR in gsl_integration_fixed\n");
+            return;
+        }
+        bg.luminosity_distances[timesteps - i - 1] = (1.0+z)/c->H0*integral;
+        gsl_integration_fixed_free(w);        
+    }
+    if (luminosity_distance_interpolator == NULL) {
+        luminosity_distance_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
+    }
+    int status = gsl_interp_init(luminosity_distance_interpolator, bg.loga, bg.luminosity_distances, timesteps+1);
+    if (status != GSL_SUCCESS) {
+        fprintf(stderr, "ERROR: could not initialize luminosity distance interpolator\n");
+        exit(1);
+    }
+}
+
+// Interface with NumPy `np.array`
+typedef struct {
+    double *data;
+    size_t len;
+} Array;
+
+Array get_luminosity_distances(double *z, size_t z_len) {
+    double *data = malloc(z_len*sizeof(double));
+    if (data == NULL) {
+        fprintf(stderr, "ERROR: could not allocate memory for luminosity distances\n");
+        exit(1);
+    }
+    gsl_interp_accel *accel = gsl_interp_accel_alloc();
+    for (size_t i = 0; i < z_len; ++i) {
+        float a = 1.0/(1.0+z[i]);
+        // TODO: error when out of bounds
+        float result = gsl_interp_eval(luminosity_distance_interpolator, bg.loga, bg.luminosity_distances, log(a), accel);
+        data[i] = result;
+    }
+    return (Array) { .data = data, .len = z_len };
+}
+
+
+// -------------------- Perturbations --------------------
+
+/*
+    Perturbations:
+        - `delta` denotes the density contrast;
+        - `theta` denotes the velocity divergence, $ \theta = k*v $;
+        - `Phi` is the Newtonian gauge gravitational potential;
+        - `tau` is the conformal time.
+ */
 
 typedef struct {
     double delta_c;
@@ -158,7 +289,7 @@ int dy_dloga_gsl(double loga, const double y[], double y_prime[], void *params) 
 typedef struct {
     Perturbations *y;
     double *loga;
-    int timesteps;
+    int num_loga;
 } Result;
 
 // odeint(dy_dloga, y, loga_int, k);
@@ -202,7 +333,7 @@ Result odeint(Cosmo c, Perturbations y_ini, double loga_ini, double k) {
         loga_int[i + 1] = loga;
     }
     gsl_odeiv2_driver_free(driver);
-    return (Result) {.loga = loga_int, .y = y, .timesteps = timesteps};
+    return (Result) {.loga = loga_int, .y = y, .num_loga = timesteps+1};
 }
 
 static_assert(sizeof(Perturbations) == 6*sizeof(double), "Exhaustive handling of Perturbations in initial_conditions");
@@ -228,8 +359,7 @@ Perturbations initial_conditions(Cosmo c, double k, double tau_ini) {
 }
 
 Result solve_einstein_boltzmann(Cosmo c, double k) {
-    const double tau_ini = 3e-4;
-    const double a_ini = c.H0*sqrt(c.Omega_gamma)*tau_ini + c.H0*c.H0*c.Omega_m*tau_ini*tau_ini/4.0;
+    float loga_ini = bg.loga[0];
     Perturbations y_ini = initial_conditions(c, k, tau_ini);
-    return odeint(c, y_ini, log(a_ini), k);
+    return odeint(c, y_ini, loga_ini, k);
 }

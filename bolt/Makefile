@@ -22,14 +22,23 @@ $(BUILD_FOLDER)/bolt.o: bolt.c
 # TODO: make a test suite. For now, this compiles a minimal executable.
 # In the future, I want to test the different features of Bolt.
 .PHONY: test
-test: bolt.c tests/hello_world.c tests/hello_world.py
-	@echo "Testing C..."
+test: bolt.c tests/hello_world.c tests/hello_world.py tests/distances.c tests/distances.py
+	
+	@echo "Compiling distances test..."
+	gcc -o tests/distances tests/distances.c -lm -lgsl -lgslcblas -ggdb 
+	@echo "Executing distances test..."
+	@echo "Expected output: z = 0.50, D_L = 2940.46 Mpc || z = 1.00, D_L = 6826.99 Mpc"
+	@echo "Actual output C :   `./tests/distances; echo Status: $$?`"
+	@echo "Actual output Py:   `python3 ./tests/distances.py; echo Status: $$?`"
+	
+	@echo "Compiling transfer function test..."
 	gcc -o tests/hello_world tests/hello_world.c -lm -lgsl -lgslcblas -ggdb
-	@echo "Expected output: Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -63202.869051"
-	@echo "Actual output:   `./tests/hello_world; echo Status: $$?`"
-	@echo "Testing Python..."
-	@echo "Expected output: Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -63202.869051"
-	@echo "Actual output:   `python3 ./tests/hello_world.py; echo Status: $$?`"
+
+	
+	@echo "Executing transfer function test..."
+	@echo "Expected output:  Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -65266.918234"
+	@echo "Actual output C : `./tests/hello_world; echo Status: $$?`"
+	@echo "Actual output Py: `python3 ./tests/hello_world.py; echo Status: $$?`"
 
 bench: bolt.c tests/hello_world
 	@echo "Benchmarking..."

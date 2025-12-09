@@ -9,6 +9,10 @@ import ctypes
 from typing import *
 import numpy as np
 
+libc = ctypes.CDLL("libc.so.6")
+libc.free.argtypes = (ctypes.c_void_p,)
+libc.free.restype = None
+
 path = "/".join(__file__.split("/")[:-1])
 if not os.path.exists(f"{path}/build/libbolt.so"):
     raise ImportError(f"Bolt tried to look for `libbolt.so` at `{path}/libbolt.so`, but it does not exist.")
@@ -20,25 +24,29 @@ except OSError as e:
 
 with open(f"{path}/bolt.c", "r") as f:
     for line in f.read().splitlines():
-        if line.startswith("const int timesteps"):
-            timesteps = int(line.split()[-1][:-1])
+        if line.startswith("#define timesteps"):
+            timesteps = int(line.split()[-1])
 
 class Cosmo(ctypes.Structure):
-    _fields_ = [
+    _fields_ =  [
         ("h", ctypes.c_double),
         ("Omega_m", ctypes.c_double),
+        ("Omega_b", ctypes.c_double),
+        ("A_s", ctypes.c_double),
+        ("n_s", ctypes.c_double),
         ("Omega_Lambda", ctypes.c_double),
+        ("Omega_c", ctypes.c_double),
         ("H0", ctypes.c_double),
         ("rho_crit", ctypes.c_double),
-        ("Omega_r", ctypes.c_double),
+        ("Omega_gamma", ctypes.c_double),
         ("a_eq", ctypes.c_double),
     ]
 
-    def __init__(self, h: float, Omega_m: float) -> Self:
-        libbolt.InitCosmo(ctypes.byref(self), h, Omega_m)
+    def __init__(self, h: float, Omega_m: float, Omega_b: float, A_s: float, n_s: float) -> Self:
+        libbolt.InitCosmo(ctypes.byref(self), h, Omega_m, Omega_b, A_s, n_s)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}: \n" + f"  - h = {self.h:.4f}\n" + f"  - Omega_m = {self.Omega_m:.4f}"
+        return f"{self.__class__.__name__}:\n" + "\n".join([f"  - {field[0]}: {getattr(self, field[0])}" for field in self._fields_[:5]])
     
     def rho_m(self, a):
         return libbolt.rho_m(self, a)
@@ -80,8 +88,8 @@ class Perturbations(ctypes.Structure):
 class Result(ctypes.Structure):
     _fields_ = [
         ("y", ctypes.POINTER(Perturbations)),
-        ("a", ctypes.POINTER(ctypes.c_double)),
-        ("timesteps", ctypes.c_int),
+        ("loga", ctypes.POINTER(ctypes.c_double)),
+        ("num_loga", ctypes.c_int),
     ]
 
     def as_np_arrays(self):
@@ -90,6 +98,24 @@ class Result(ctypes.Structure):
         y = np.array([self.y[i].as_np_array() for i in range(self.timesteps+1)])
         return a, y
 
+class Array(ctypes.Structure):
+    _fields_ = [("data", ctypes.POINTER(ctypes.c_double)),
+                ("len", ctypes.c_int)]
+
+
+def calc_background(c: Cosmo):
+    libbolt.calc_background(ctypes.byref(c))
+
+def get_luminosity_distances(z_values):
+    z_array = np.asarray(z_values, dtype=np.float64)
+    result = libbolt.get_luminosity_distances(z_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(z_array))
+    # Convert C array to numpy array
+    d_L = np.ctypeslib.as_array(result.data, shape=(result.len,)).copy()
+    
+    # Free C-allocated memory
+    libc.free(result.data)
+    
+    return d_L
 
 def solve_einstein_boltzmann(c: Cosmo, k: float) -> Result:
     return libbolt.solve_einstein_boltzmann(c, k)
@@ -111,7 +137,11 @@ libbolt.P.argtypes = (Cosmo, ctypes.c_double)
 libbolt.P.restype = ctypes.c_double
 libbolt.H_curly.argtypes = (Cosmo, ctypes.c_double)
 libbolt.H_curly.restype = ctypes.c_double
-libbolt.InitCosmo.argtypes = [ctypes.POINTER(Cosmo), ctypes.c_double, ctypes.c_double]
+libbolt.InitCosmo.argtypes = [ctypes.POINTER(Cosmo), ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double]
+libbolt.calc_background.argtypes = [ctypes.POINTER(Cosmo)]
+libbolt.calc_background.restype = None
+libbolt.get_luminosity_distances.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+libbolt.get_luminosity_distances.restype = Array
 # TODO: interface dy_da
 # libbolt.dy_dloga.argtypes = [Cosmo, Perturbations, ctypes.c_double, ctypes.c_double]
 # libbolt.dy_dloga.restype = Perturbations

@@ -12,11 +12,14 @@ int main() {
     const double Omega_b = 0.049;
     const double A_s = 2.1e-9;
     const double n_s = 0.96;
-
     InitCosmo(&c, h, Omega_m, Omega_b, A_s, n_s);
     calc_background(&c);
-    Result r = solve_einstein_boltzmann(c, 0.1);
-    printf("Hello, from Bolt! For h = %.2f, Omega_m = %.3f, \\delta_m(k=0.1, z=0) = %.6f\n", h, Omega_m, r.y[timesteps].delta_c);
+
+    // Arbitrary values
+    double z[] = {0.5, 1.0};
+    Array distances = get_luminosity_distances(z, sizeof(z)/sizeof(z[0]));
+    printf("z = %.2f, D_L = %.2f Mpc || z = %.2f, D_L = %.2f Mpc\n", z[0], distances.data[0], z[1], distances.data[1]);
+
 
     return 0;
 }
