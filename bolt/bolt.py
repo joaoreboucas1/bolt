@@ -106,9 +106,9 @@ class Array(ctypes.Structure):
 def calc_background(c: Cosmo):
     libbolt.calc_background(ctypes.byref(c))
 
-def get_luminosity_distances(z_values):
+def get_comoving_distances(z_values):
     z_array = np.asarray(z_values, dtype=np.float64)
-    result = libbolt.get_luminosity_distances(z_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(z_array))
+    result = libbolt.get_comoving_distances(z_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(z_array))
     # Convert C array to numpy array
     d_L = np.ctypeslib.as_array(result.data, shape=(result.len,)).copy()
     
@@ -140,8 +140,8 @@ libbolt.H_curly.restype = ctypes.c_double
 libbolt.InitCosmo.argtypes = [ctypes.POINTER(Cosmo), ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double]
 libbolt.calc_background.argtypes = [ctypes.POINTER(Cosmo)]
 libbolt.calc_background.restype = None
-libbolt.get_luminosity_distances.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
-libbolt.get_luminosity_distances.restype = Array
+libbolt.get_comoving_distances.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+libbolt.get_comoving_distances.restype = Array
 # TODO: interface dy_da
 # libbolt.dy_dloga.argtypes = [Cosmo, Perturbations, ctypes.c_double, ctypes.c_double]
 # libbolt.dy_dloga.restype = Perturbations

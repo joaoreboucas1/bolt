@@ -33,10 +33,17 @@
 #define w_m 0.0
 #define w_Lambda -1.0
 
-// Integration:
-//     - Integration is performed on $ln(a)$
-//     - We choose an initial conformal time $\tau_\mathrm{ini}$
-//     - We calculate the initial value of "a" using a radiation-dominated approximation (requires cosmological parameters)
+/*
+ *  Time-stepping:
+ *      - Perturbation equations are integrated over $ln(a)$ and require background predictions
+ *      - We choose an initial conformal time $\tau_\mathrm{ini} = 3x10^(-4) Mpc$
+ *      - We calculate the initial value of "a" using a radiation-dominated approximation (requires cosmological parameters)
+ *      - We choose linearly separated steps on `loga` until `loga = 0`
+ *      - We precompute a table of background quantities (a, tau, rho_i, H) calculated at the `loga` values
+ *      - These tables are used to generate interpolators
+ */
+
+ // NOTE: the number of time points, including the initial and final times, is `timesteps + 1` 
 #define timesteps 999
 const double tau_ini = 3e-4;
 
@@ -126,16 +133,21 @@ double H_curly(Cosmo c, double a) {
 typedef struct {
     double loga[timesteps+1];
     double a[timesteps+1];
-    double luminosity_distances[timesteps+1];
+    double z[timesteps+1];
+    double tau[timesteps+1];
+    double comoving_distances[timesteps+1];
+    double H[timesteps+1];
+    double H_inv[timesteps+1];
 } Background;
 
 Background bg;
-gsl_interp *luminosity_distance_interpolator = NULL;
+gsl_interp *comoving_distance_interpolator = NULL;
+gsl_spline *dl_spline = NULL;
 
 double inverse_NormHubble_gsl_integration(double z, void* params) {
     // NOTE: NormHubble = H(z)/H_0
     Cosmo c = *(Cosmo*)params;
-    double a = 1/(1.0 + z);
+    double a = 1.0/(1.0 + z);
     double H = H_curly(c, a)/a;
     return c.H0/H;
 }
@@ -148,39 +160,48 @@ void calc_background(Cosmo *c) {
     for (size_t i = 0; i < timesteps+1; ++i) {
         bg.loga[i] = bg.loga[0] + i*dloga_int;
         bg.a[i] = exp(bg.loga[i]);
+        bg.z[i] = 1.0/bg.a[i] - 1.0;
+        bg.H[i] = H_curly(*c, bg.a[i]);
+        bg.H_inv[i] = 1.0/bg.H[i];
     }
-    
-    double integral;
-    bg.luminosity_distances[timesteps] = 0.0;
+
+    double integral, abserr;
+    double cumulative_integral = 0.0;
+    bg.comoving_distances[timesteps] = 0.0;
+    gsl_integration_workspace *w = gsl_integration_workspace_alloc(timesteps);
+    gsl_function integrand;
+    integrand.function = &inverse_NormHubble_gsl_integration;
+    integrand.params = (void*)c;
     for (size_t i = 0; i < timesteps; i++) {
-        const double z = 1.0/bg.a[timesteps - i - 1] - 1.0;
-        gsl_integration_fixed_workspace *w = gsl_integration_fixed_alloc(
-            gsl_integration_fixed_legendre,
-            5, // Number of quadrature nodes
-            0.0,
-            z,
-            0.0, // NOTE: parameter `alpha` is ignored
-            0.0 //  NOTE: parameter `beta is ignored
-        );
-        gsl_function integrand;
-        integrand.function = &inverse_NormHubble_gsl_integration;
-        integrand.params = (void*)c;
-        int status = gsl_integration_fixed(&integrand, &integral, w);
+        const double z_now = bg.z[timesteps - i];
+        const double z_next = bg.z[timesteps - i - 1];
+        int status = gsl_integration_qag(
+            &integrand,
+            z_now, 
+            z_next, 
+            0.0, 
+            1e-5, 
+            timesteps, 
+            GSL_INTEG_GAUSS21, 
+            w, 
+            &integral, 
+            &abserr);
+        cumulative_integral += integral;
         if (status != GSL_SUCCESS) {
             fprintf(stderr, "ERROR in gsl_integration_fixed\n");
             return;
         }
-        bg.luminosity_distances[timesteps - i - 1] = (1.0+z)/c->H0*integral;
-        gsl_integration_fixed_free(w);        
+        bg.comoving_distances[timesteps - i - 1] = 1.0/c->H0*cumulative_integral;
     }
-    if (luminosity_distance_interpolator == NULL) {
-        luminosity_distance_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
+    if (comoving_distance_interpolator == NULL) {
+        comoving_distance_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
     }
-    int status = gsl_interp_init(luminosity_distance_interpolator, bg.loga, bg.luminosity_distances, timesteps+1);
+    int status = gsl_interp_init(comoving_distance_interpolator, bg.loga, bg.comoving_distances, timesteps+1);
     if (status != GSL_SUCCESS) {
-        fprintf(stderr, "ERROR: could not initialize luminosity distance interpolator\n");
+        fprintf(stderr, "ERROR: could not initialize comoving distance interpolator\n");
         exit(1);
     }
+    gsl_integration_workspace_free(w);
 }
 
 // Interface with NumPy `np.array`
@@ -189,17 +210,17 @@ typedef struct {
     size_t len;
 } Array;
 
-Array get_luminosity_distances(double *z, size_t z_len) {
+Array get_comoving_distances(double *z, size_t z_len) {
     double *data = malloc(z_len*sizeof(double));
     if (data == NULL) {
-        fprintf(stderr, "ERROR: could not allocate memory for luminosity distances\n");
+        fprintf(stderr, "ERROR: could not allocate memory for comoving distances\n");
         exit(1);
     }
     gsl_interp_accel *accel = gsl_interp_accel_alloc();
     for (size_t i = 0; i < z_len; ++i) {
         float a = 1.0/(1.0+z[i]);
         // TODO: error when out of bounds
-        float result = gsl_interp_eval(luminosity_distance_interpolator, bg.loga, bg.luminosity_distances, log(a), accel);
+        float result = gsl_interp_eval(comoving_distance_interpolator, bg.loga, bg.comoving_distances, log(a), accel);
         data[i] = result;
     }
     return (Array) { .data = data, .len = z_len };

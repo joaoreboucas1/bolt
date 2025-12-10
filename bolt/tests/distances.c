@@ -17,8 +17,8 @@ int main() {
 
     // Arbitrary values
     double z[] = {0.5, 1.0};
-    Array distances = get_luminosity_distances(z, sizeof(z)/sizeof(z[0]));
-    printf("z = %.2f, D_L = %.2f Mpc || z = %.2f, D_L = %.2f Mpc\n", z[0], distances.data[0], z[1], distances.data[1]);
+    Array distances = get_comoving_distances(z, sizeof(z)/sizeof(z[0]));
+    printf("z = %.2f, \\chi = %.2f Mpc || z = %.2f, \\chi = %.2f Mpc\n", z[0], distances.data[0], z[1], distances.data[1]);
 
 
     return 0;
