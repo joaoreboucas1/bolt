@@ -13,5 +13,5 @@ if __name__ == "__main__":
 
     c = bolt.Cosmo(h, Omega_m, Omega_b, A_s, n_s)
     bolt.calc_background(c)
-    r = bolt.solve_einstein_boltzmann(c, 0.1)
-    print(f"Hello, from Bolt! For h = {h:.2f}, Omega_m = {Omega_m:.3f}, \\delta_m(k=0.1, z=0) = {r.y[bolt.timesteps].delta_c:.6f}")
+    result = bolt.solve_einstein_boltzmann(c, 0.1)
+    print(f"Hello, from Bolt! For h = {h:.2f}, Omega_m = {Omega_m:.3f}, \\delta_m(k=0.1, z=0) = {result[bolt.timesteps].delta_c:.6f}")

@@ -22,6 +22,7 @@ try:
 except OSError as e:
     raise ImportError(f"Bolt tried to load `libbolt.so`, but we got an error: \n{e}\n. Make sure compilation went fine; otherwise, you can create an issue in Github.")
 
+# TODO: the .so does not export macros. How can we get constants?
 with open(f"{path}/bolt.c", "r") as f:
     for line in f.read().splitlines():
         if line.startswith("#define timesteps"):
@@ -73,7 +74,6 @@ class Perturbations(ctypes.Structure):
         ("delta_gamma", ctypes.c_double),
         ("theta_gamma", ctypes.c_double),
         ("Phi", ctypes.c_double),
-        ("tau", ctypes.c_double),
     ]
 
     def as_np_array(self):
@@ -84,19 +84,6 @@ class Perturbations(ctypes.Structure):
     
     def __repr__(self):
         return f"{self.__class__.__name__}: \n" + "\n".join([f"  - {field[0]}: {getattr(self, field[0])}" for field in self._fields_])
-
-class Result(ctypes.Structure):
-    _fields_ = [
-        ("y", ctypes.POINTER(Perturbations)),
-        ("loga", ctypes.POINTER(ctypes.c_double)),
-        ("num_loga", ctypes.c_int),
-    ]
-
-    def as_np_arrays(self):
-        a = np.ctypeslib.as_array(self.a, shape=(self.timesteps+1,))
-        # TODO: this is not the most efficient way of constructing this array
-        y = np.array([self.y[i].as_np_array() for i in range(self.timesteps+1)])
-        return a, y
 
 class Array(ctypes.Structure):
     _fields_ = [("data", ctypes.POINTER(ctypes.c_double)),
@@ -117,10 +104,11 @@ def get_comoving_distances(z_values):
     
     return d_L
 
-def solve_einstein_boltzmann(c: Cosmo, k: float) -> Result:
+def solve_einstein_boltzmann(c: Cosmo, k: float):
+    # TODO: libbolt.solve_einstein_boltzmann returns a pointer to a global variable, is this a good idea?
     return libbolt.solve_einstein_boltzmann(c, k)
 
-def integrate(c: Cosmo, k: float) -> Result:
+def integrate(c: Cosmo, k: float):
     # Backwards compatibility
     return solve_einstein_boltzmann(c, k)
 
@@ -146,4 +134,4 @@ libbolt.get_comoving_distances.restype = Array
 # libbolt.dy_dloga.argtypes = [Cosmo, Perturbations, ctypes.c_double, ctypes.c_double]
 # libbolt.dy_dloga.restype = Perturbations
 libbolt.solve_einstein_boltzmann.argtypes = [Cosmo, ctypes.c_double]
-libbolt.solve_einstein_boltzmann.restype = Result    
+libbolt.solve_einstein_boltzmann.restype = ctypes.POINTER(Perturbations)    

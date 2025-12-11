@@ -15,8 +15,8 @@ int main() {
 
     InitCosmo(&c, h, Omega_m, Omega_b, A_s, n_s);
     calc_background(&c);
-    Result r = solve_einstein_boltzmann(c, 0.1);
-    printf("Hello, from Bolt! For h = %.2f, Omega_m = %.3f, \\delta_m(k=0.1, z=0) = %.6f\n", h, Omega_m, r.y[timesteps].delta_c);
+    solve_einstein_boltzmann(c, 0.1);
+    printf("Hello, from Bolt! For h = %.2f, Omega_m = %.3f, \\delta_m(k=0.1, z=0) = %.6f\n", h, Omega_m, result[timesteps].delta_c);
 
     return 0;
 }

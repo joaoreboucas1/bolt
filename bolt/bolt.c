@@ -47,7 +47,11 @@
 #define timesteps 999
 const double tau_ini = 3e-4;
 
-// -------------------- Interface for engineering the cosmological model --------------------
+// -------------------- Model Interface --------------------
+
+/*
+ *  `Cosmo` is a struct that holds input parameters as well as useful derived parameters that can be reused.
+ */
 
 typedef struct {
     // Input parameters
@@ -123,11 +127,10 @@ double H_curly(Cosmo c, double a) {
 
 /*
     `Background` is a type for the library's background tables.
-    The integration of perturbations requires the knowledge about several background functions.
-    The calculation of these functions requires a few floating-point operations, seen above.
+    The integration of perturbations requires the computation of several background functions.
     The ultimate goal of the library is to calculate perturbation equations for several values of the Fourier wavenumber $k$.
     We don't need to recalculate the background for each Fourier wavenumber, so we just do it once and save the results in background tables.
-    Then, we define interpolators.
+    Then, we define GSL interpolators that can be reused in the perturbation equations as well as in the outputs of the library.
 */
 // 
 typedef struct {
@@ -140,7 +143,7 @@ typedef struct {
 
 Background bg;
 gsl_interp *tau_interpolator = NULL;
-gsl_spline *dl_spline = NULL;
+gsl_interp *H_interpolator = NULL;
 
 double inverse_NormHubble_gsl_integration(double z, void* params) {
     // NOTE: NormHubble = H(z)/H_0
@@ -160,7 +163,7 @@ void calc_background(Cosmo *c) {
     bg.H[0] = H_curly(*c, a_ini)/a_ini;
     const double dloga_int = -bg.loga[0]/timesteps;
     
-    // NOTE: \tau(z) - \tau(z_ini) = \int_{z_ini}^{z} dz/H(z)
+    // NOTE: \tau(z) - \tau(z_ini) = \int_{z}^{z_ini} dz/H(z)
     double integral, abserr;
     double cumulative_integral = 0.0;
     gsl_integration_workspace *w = gsl_integration_workspace_alloc(timesteps);
@@ -182,7 +185,7 @@ void calc_background(Cosmo *c) {
             1e-5, // relerr
             timesteps, 
             GSL_INTEG_GAUSS21, 
-            w, 
+            w,  
             &integral, 
             &abserr);
         if (status != GSL_SUCCESS) {
@@ -193,12 +196,16 @@ void calc_background(Cosmo *c) {
         bg.tau[i] = tau_ini + 1.0/c->H0*cumulative_integral; // 
     }
 
-    if (tau_interpolator == NULL) {
-        tau_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
-    }
+    if (tau_interpolator == NULL) tau_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
+    if (H_interpolator == NULL) H_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
     int status = gsl_interp_init(tau_interpolator, bg.loga, bg.tau, timesteps+1);
     if (status != GSL_SUCCESS) {
-        fprintf(stderr, "ERROR: could not initialize comoving distance interpolator\n");
+        fprintf(stderr, "ERROR: could not initialize tau interpolator\n");
+        exit(1);
+    }
+    status = gsl_interp_init(H_interpolator, bg.loga, bg.H, timesteps+1);
+    if (status != GSL_SUCCESS) {
+        fprintf(stderr, "ERROR: could not initialize Hubble factor interpolator\n");
         exit(1);
     }
     gsl_integration_workspace_free(w);
@@ -223,6 +230,7 @@ Array get_comoving_distances(double *z, size_t z_len) {
         float result = gsl_interp_eval(tau_interpolator, bg.loga, bg.tau, log(a), accel); // tau(a)
         data[i] = bg.tau[timesteps] - result;
     }
+    gsl_interp_accel_free(accel);
     return (Array) { .data = data, .len = z_len };
 }
 
@@ -243,20 +251,18 @@ typedef struct {
     double delta_gamma;
     double theta_gamma;
     double Phi;
-    double tau; // TODO: build a background table
 } Perturbations;
 
-static_assert(sizeof(Perturbations) == 6*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Scale");
+static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Scale");
 void Perturbations_Scale(Perturbations *p, double s) {
     p->delta_c *= s;
     p->theta_c *= s;
     p->delta_gamma *= s;
     p->theta_gamma *= s;
     p->Phi *= s;
-    p->tau *= s;
 }
 
-static_assert(sizeof(Perturbations) == 6*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Add");
+static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Add");
 Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
     Perturbations p = (Perturbations) {
         .delta_c = a.delta_c + b.delta_c,
@@ -264,7 +270,6 @@ Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
         .delta_gamma = a.delta_gamma + b.delta_gamma,
         .theta_gamma = a.theta_gamma + b.theta_gamma,
         .Phi = a.Phi + b.Phi,
-        .tau = a.tau + b.tau,
     };
     return p;
 }
@@ -275,13 +280,14 @@ typedef struct {
 } ODE_Params;
 
 // int deriv(double t, const double y[], double dydt[], void *Params)
-static_assert(sizeof(Perturbations) == 6*sizeof(double), "Exhaustive handling of Perturbations in dy_da");
+static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in dy_da");
 int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
     ODE_Params ode_params = *(ODE_Params*) params;
     const Cosmo c = ode_params.c;
     const double k = ode_params.k;
     const double k2 = k*k;
     const double a2 = a*a;
+    // TODO: we could use the background interpolators for these calculations
     const double H = H_curly(c, a);
     const double rho_m_now = rho_m(c, a);
     const double rho_gamma_now = rho_gamma(c, a);
@@ -292,7 +298,6 @@ int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
     const double theta_c_prime = -H*y.theta_c + k2 * y.Phi;
     const double delta_gamma_prime = -4.0*y.theta_gamma/3.0 + 4.0*Phi_prime;
     const double theta_gamma_prime = k2*(y.delta_gamma/4.0 - sigma_gamma) + k2*y.Phi;
-    const double tau_prime = 1.0;
 
     *y_prime = (Perturbations) {
        .delta_c = delta_c_prime,
@@ -300,15 +305,13 @@ int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
        .delta_gamma = delta_gamma_prime,
        .theta_gamma = theta_gamma_prime,
        .Phi = Phi_prime,
-       .tau = tau_prime
-   };
-
+    };
     Perturbations_Scale(y_prime, 1.0/(a*H));
     return GSL_SUCCESS;
 }
 
 int dy_dloga(double loga, Perturbations y, Perturbations *y_prime, void *params) {
-    const double a = exp(loga);
+    const double a = exp(loga); // TODO: can we use the interpoolation table?
     dy_da(a, y, y_prime, params);
     Perturbations_Scale(y_prime, a);
     return GSL_SUCCESS;
@@ -318,14 +321,10 @@ int dy_dloga_gsl(double loga, const double y[], double y_prime[], void *params) 
     return dy_dloga(loga, *(Perturbations*)y, (Perturbations*)y_prime, params);
 }
 
-typedef struct {
-    Perturbations *y;
-    double *loga;
-    int num_loga;
-} Result;
+Perturbations result[timesteps+1];
 
 // odeint(dy_dloga, y, loga_int, k);
-Result odeint(Cosmo c, Perturbations y_ini, double loga_ini, double k) {
+void odeint(Cosmo c, Perturbations y_ini, double loga_ini, double k) {
     const double dloga_int = -loga_ini/timesteps;
     ODE_Params params = (ODE_Params) {
         .c = c,
@@ -343,33 +342,22 @@ Result odeint(Cosmo c, Perturbations y_ini, double loga_ini, double k) {
     const double epsrel = 0.0;
     gsl_odeiv2_driver *driver = gsl_odeiv2_driver_alloc_y_new(&sys, gsl_odeiv2_step_rkf45, hstart, epsabs, epsrel);
 
-    const int n_data = timesteps + 1;
-    // TODO: I'm returning newly allocated memory to the caller. Is this a good idea?
-    Perturbations *y = malloc(n_data*sizeof(Perturbations));
-    double *loga_int = malloc(n_data*sizeof(double));
-    if (loga_int == NULL) {
-        printf("ERROR: could not allocate memory for integration\n");
-        exit(1);
-    }
     Perturbations state = y_ini;
-    y[0] = state;
+    result[0] = state;
 
     double loga = loga_ini;
-    loga_int[0] = loga_ini;
     for (int i = 0; i < timesteps; i++) {
         const double loga_next = loga + dloga_int;
         gsl_odeiv2_driver_apply(driver, &loga, loga_next, (double*)&state);
         // TODO: maybe consider fixed step?
         // gsl_odeiv2_driver_apply_fixed_step(driver, &loga, dloga_int, 1, (double*)&state);
-        y[i + 1] = state;
-        loga_int[i + 1] = loga;
+        result[i + 1] = state;
     }
     gsl_odeiv2_driver_free(driver);
-    return (Result) {.loga = loga_int, .y = y, .num_loga = timesteps+1};
 }
 
-static_assert(sizeof(Perturbations) == 6*sizeof(double), "Exhaustive handling of Perturbations in initial_conditions");
-Perturbations initial_conditions(Cosmo c, double k, double tau_ini) {
+static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in initial_conditions");
+Perturbations initial_conditions(Cosmo c, double k) {
     (void) c;
     const double k2 = k*k;
     const double C = 1.0; // Arbitrary scale of adiabatic initial conditions
@@ -385,13 +373,13 @@ Perturbations initial_conditions(Cosmo c, double k, double tau_ini) {
         .theta_gamma = theta_gamma_ini,
         .delta_c = delta_c_ini,
         .theta_c = theta_c_ini,
-        .tau = tau_ini
     };
     return y_ini;
 }
 
-Result solve_einstein_boltzmann(Cosmo c, double k) {
+Perturbations *solve_einstein_boltzmann(Cosmo c, double k) {
     float loga_ini = bg.loga[0];
-    Perturbations y_ini = initial_conditions(c, k, tau_ini);
-    return odeint(c, y_ini, loga_ini, k);
+    Perturbations y_ini = initial_conditions(c, k);
+    odeint(c, y_ini, loga_ini, k);
+    return result;
 }
