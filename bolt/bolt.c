@@ -135,13 +135,11 @@ typedef struct {
     double a[timesteps+1];
     double z[timesteps+1];
     double tau[timesteps+1];
-    double comoving_distances[timesteps+1];
     double H[timesteps+1];
-    double H_inv[timesteps+1];
 } Background;
 
 Background bg;
-gsl_interp *comoving_distance_interpolator = NULL;
+gsl_interp *tau_interpolator = NULL;
 gsl_spline *dl_spline = NULL;
 
 double inverse_NormHubble_gsl_integration(double z, void* params) {
@@ -152,51 +150,53 @@ double inverse_NormHubble_gsl_integration(double z, void* params) {
     return c.H0/H;
 }
 
+// Computes the background table and initializes GSL interpolators
 void calc_background(Cosmo *c) {
     const double a_ini = c->H0*sqrt(c->Omega_gamma)*tau_ini + c->H0*c->H0*c->Omega_m*tau_ini*tau_ini/4.0;
     bg.a[0] = a_ini;
     bg.loga[0] = log(a_ini);
+    bg.z[0] = 1.0/a_ini - 1.0;
+    bg.tau[0] = tau_ini;
+    bg.H[0] = H_curly(*c, a_ini)/a_ini;
     const double dloga_int = -bg.loga[0]/timesteps;
-    for (size_t i = 0; i < timesteps+1; ++i) {
-        bg.loga[i] = bg.loga[0] + i*dloga_int;
-        bg.a[i] = exp(bg.loga[i]);
-        bg.z[i] = 1.0/bg.a[i] - 1.0;
-        bg.H[i] = H_curly(*c, bg.a[i]);
-        bg.H_inv[i] = 1.0/bg.H[i];
-    }
-
+    
+    // NOTE: \tau(z) - \tau(z_ini) = \int_{z_ini}^{z} dz/H(z)
     double integral, abserr;
     double cumulative_integral = 0.0;
-    bg.comoving_distances[timesteps] = 0.0;
     gsl_integration_workspace *w = gsl_integration_workspace_alloc(timesteps);
     gsl_function integrand;
     integrand.function = &inverse_NormHubble_gsl_integration;
     integrand.params = (void*)c;
-    for (size_t i = 0; i < timesteps; i++) {
-        const double z_now = bg.z[timesteps - i];
-        const double z_next = bg.z[timesteps - i - 1];
+    for (size_t i = 1; i < timesteps+1; ++i) {
+        bg.loga[i]  = bg.loga[i-1] + dloga_int;
+        bg.a[i]     = exp(bg.loga[i]);
+        bg.z[i]     = 1.0/bg.a[i] - 1.0;
+        bg.H[i]     = H_curly(*c, bg.a[i])/bg.a[i];
+
+        // Performing \tau integration
         int status = gsl_integration_qag(
             &integrand,
-            z_now, 
-            z_next, 
-            0.0, 
-            1e-5, 
+            bg.z[i], 
+            bg.z[i-1], 
+            0.0,  // abserr
+            1e-5, // relerr
             timesteps, 
             GSL_INTEG_GAUSS21, 
             w, 
             &integral, 
             &abserr);
-        cumulative_integral += integral;
         if (status != GSL_SUCCESS) {
-            fprintf(stderr, "ERROR in gsl_integration_fixed\n");
-            return;
+            fprintf(stderr, "ERROR: could not integrate background tau");
+            exit(1);
         }
-        bg.comoving_distances[timesteps - i - 1] = 1.0/c->H0*cumulative_integral;
+        cumulative_integral += integral;
+        bg.tau[i] = tau_ini + 1.0/c->H0*cumulative_integral; // 
     }
-    if (comoving_distance_interpolator == NULL) {
-        comoving_distance_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
+
+    if (tau_interpolator == NULL) {
+        tau_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
     }
-    int status = gsl_interp_init(comoving_distance_interpolator, bg.loga, bg.comoving_distances, timesteps+1);
+    int status = gsl_interp_init(tau_interpolator, bg.loga, bg.tau, timesteps+1);
     if (status != GSL_SUCCESS) {
         fprintf(stderr, "ERROR: could not initialize comoving distance interpolator\n");
         exit(1);
@@ -220,8 +220,8 @@ Array get_comoving_distances(double *z, size_t z_len) {
     for (size_t i = 0; i < z_len; ++i) {
         float a = 1.0/(1.0+z[i]);
         // TODO: error when out of bounds
-        float result = gsl_interp_eval(comoving_distance_interpolator, bg.loga, bg.comoving_distances, log(a), accel);
-        data[i] = result;
+        float result = gsl_interp_eval(tau_interpolator, bg.loga, bg.tau, log(a), accel); // tau(a)
+        data[i] = bg.tau[timesteps] - result;
     }
     return (Array) { .data = data, .len = z_len };
 }

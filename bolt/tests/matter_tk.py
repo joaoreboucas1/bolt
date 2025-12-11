@@ -1,5 +1,5 @@
 """
-   A minimal Pythons script using Bolt.
+   A minimal Python script using Bolt.
 """
 
 import bolt

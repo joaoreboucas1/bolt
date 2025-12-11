@@ -22,7 +22,7 @@ $(BUILD_FOLDER)/bolt.o: bolt.c
 # TODO: make a test suite. For now, this compiles a minimal executable.
 # In the future, I want to test the different features of Bolt.
 .PHONY: test
-test: bolt.c tests/hello_world.c tests/hello_world.py tests/distances.c tests/distances.py
+test: bolt.c tests/matter_tk.c tests/matter_tk.py tests/distances.c tests/distances.py
 	
 	@echo "Compiling distances test..."
 	gcc -o tests/distances tests/distances.c -lm -lgsl -lgslcblas -ggdb 
@@ -32,18 +32,18 @@ test: bolt.c tests/hello_world.c tests/hello_world.py tests/distances.c tests/di
 	@echo "Actual output Py: `python3 ./tests/distances.py; echo Status: $$?`"
 	
 	@echo "Compiling transfer function test..."
-	gcc -o tests/hello_world tests/hello_world.c -lm -lgsl -lgslcblas -ggdb
+	gcc -o tests/matter_tk tests/matter_tk.c -lm -lgsl -lgslcblas -ggdb
 
 	
 	@echo "Executing transfer function test..."
 	@echo "Expected output:  Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -65266.918234"
-	@echo "Actual output C : `./tests/hello_world; echo Status: $$?`"
-	@echo "Actual output Py: `python3 ./tests/hello_world.py; echo Status: $$?`"
+	@echo "Actual output C : `./tests/matter_tk; echo Status: $$?`"
+	@echo "Actual output Py: `python3 ./tests/matter_tk.py; echo Status: $$?`"
 
-bench: bolt.c tests/hello_world
+bench: bolt.c tests/matter_tk
 	@echo "Benchmarking..."
-	gcc -o tests/hello_world tests/hello_world.c -lm -lgsl -lgslcblas -ggdb
-	@time ./tests/hello_world
+	gcc -o tests/matter_tk tests/matter_tk.c -lm -lgsl -lgslcblas -ggdb
+	@time ./tests/matter_tk
 
 clean:
 	@if test -d $(BUILD_FOLDER); then \
