@@ -13,6 +13,7 @@
 #include <gsl/gsl_odeiv2.h>
 #include <gsl/gsl_integration.h>
 #include <gsl/gsl_spline.h>
+#include <gsl/gsl_interp2d.h>
 #include <gsl/gsl_errno.h>
 
 // -------------------- Constants --------------------
@@ -45,6 +46,8 @@
 
  // NOTE: the number of time points, including the initial and final times, is `timesteps + 1` 
 #define timesteps 999
+#define num_loga (timesteps+1)
+#define num_a num_loga
 const double tau_ini = 3e-4;
 
 // -------------------- Model Interface --------------------
@@ -242,7 +245,6 @@ Array get_comoving_distances(double *z, size_t z_len) {
         - `delta` denotes the density contrast;
         - `theta` denotes the velocity divergence, $ \theta = k*v $;
         - `Phi` is the Newtonian gauge gravitational potential;
-        - `tau` is the conformal time.
  */
 
 typedef struct {
@@ -253,6 +255,7 @@ typedef struct {
     double Phi;
 } Perturbations;
 
+// Convenience function to multiply `Perturbation` by some factor
 static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Scale");
 void Perturbations_Scale(Perturbations *p, double s) {
     p->delta_c *= s;
@@ -262,6 +265,7 @@ void Perturbations_Scale(Perturbations *p, double s) {
     p->Phi *= s;
 }
 
+// Convenience function to add two `Perturbation`s
 static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Add");
 Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
     Perturbations p = (Perturbations) {
@@ -274,12 +278,14 @@ Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
     return p;
 }
 
+// Struct that passes parameters to the ODE solver
 typedef struct {
     Cosmo c;
     double k;
 } ODE_Params;
 
-// int deriv(double t, const double y[], double dydt[], void *Params)
+// NOTE: In GSL, the derivative function must have the following signature:
+// int deriv(double t, const double y[], double dydt[], void *params)
 static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in dy_da");
 int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
     ODE_Params ode_params = *(ODE_Params*) params;
@@ -310,50 +316,17 @@ int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
     return GSL_SUCCESS;
 }
 
+// Helper function that converts dy_da into dy_dloga
 int dy_dloga(double loga, Perturbations y, Perturbations *y_prime, void *params) {
-    const double a = exp(loga); // TODO: can we use the interpoolation table?
+    const double a = exp(loga); // TODO: can we use the interpolation table?
     dy_da(a, y, y_prime, params);
     Perturbations_Scale(y_prime, a);
     return GSL_SUCCESS;
 }
 
+// Main function that will be passed to GSL
 int dy_dloga_gsl(double loga, const double y[], double y_prime[], void *params) {
     return dy_dloga(loga, *(Perturbations*)y, (Perturbations*)y_prime, params);
-}
-
-Perturbations result[timesteps+1];
-
-// odeint(dy_dloga, y, loga_int, k);
-void odeint(Cosmo c, Perturbations y_ini, double loga_ini, double k) {
-    const double dloga_int = -loga_ini/timesteps;
-    ODE_Params params = (ODE_Params) {
-        .c = c,
-        .k = k
-    };
-
-    gsl_odeiv2_system sys = {
-        .function = dy_dloga_gsl,
-        .jacobian = NULL,
-        .dimension = (int)(sizeof(Perturbations)/sizeof(double)),
-        .params = (void*)&params
-    };
-    const double hstart = dloga_int;
-    const double epsabs = 1e-3;
-    const double epsrel = 0.0;
-    gsl_odeiv2_driver *driver = gsl_odeiv2_driver_alloc_y_new(&sys, gsl_odeiv2_step_rkf45, hstart, epsabs, epsrel);
-
-    Perturbations state = y_ini;
-    result[0] = state;
-
-    double loga = loga_ini;
-    for (int i = 0; i < timesteps; i++) {
-        const double loga_next = loga + dloga_int;
-        gsl_odeiv2_driver_apply(driver, &loga, loga_next, (double*)&state);
-        // TODO: maybe consider fixed step?
-        // gsl_odeiv2_driver_apply_fixed_step(driver, &loga, dloga_int, 1, (double*)&state);
-        result[i + 1] = state;
-    }
-    gsl_odeiv2_driver_free(driver);
 }
 
 static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in initial_conditions");
@@ -377,9 +350,109 @@ Perturbations initial_conditions(Cosmo c, double k) {
     return y_ini;
 }
 
-Perturbations *solve_einstein_boltzmann(Cosmo c, double k) {
-    float loga_ini = bg.loga[0];
+// Solves the Einstein-Boltzmann system for a single value of `k`.
+// Stores the result in `result`, which must be an array of `Perturbations` of size `timesteps+1`
+void solve_einstein_boltzmann(Cosmo c, double k, Perturbations *result) {
+    const double dloga_int = -bg.loga[0]/timesteps;
     Perturbations y_ini = initial_conditions(c, k);
-    odeint(c, y_ini, loga_ini, k);
-    return result;
+    ODE_Params params = (ODE_Params) {
+        .c = c,
+        .k = k
+    };
+
+    gsl_odeiv2_system sys = {
+        .function = dy_dloga_gsl,
+        .jacobian = NULL,
+        .dimension = (int)(sizeof(Perturbations)/sizeof(double)),
+        .params = (void*)&params
+    };
+    const double hstart = dloga_int;
+    const double epsabs = 1e-3;
+    const double epsrel = 0.0;
+    gsl_odeiv2_driver *driver = gsl_odeiv2_driver_alloc_y_new(&sys, gsl_odeiv2_step_rkf45, hstart, epsabs, epsrel);
+
+    Perturbations state = y_ini;
+    result[0] = state;
+
+    double loga = bg.loga[0];
+    for (int i = 0; i < timesteps; i++) {
+        const double loga_next = loga + dloga_int;
+        gsl_odeiv2_driver_apply(driver, &loga, loga_next, (double*)&state);
+        // TODO: maybe consider fixed step?
+        // gsl_odeiv2_driver_apply_fixed_step(driver, &loga, dloga_int, 1, (double*)&state);
+        result[i + 1] = state;
+    }
+    gsl_odeiv2_driver_free(driver);
+}
+
+// Bolt has a default array of `k` values in h/Mpc
+#define logk_min -3.0
+#define logk_max 0
+#define num_logk 10
+#define num_k num_logk
+#define dlogk (logk_max - logk_min)/(num_logk-1)
+static_assert(num_logk > 1);
+
+// Buffer to store the result of `compute_transfers`
+Perturbations transfer_functions[num_logk][timesteps+1];
+double ks[num_logk];
+
+void calc_transfers(Cosmo *c) {
+    // TODO: this can be parallelized
+    for (size_t i = 0; i < num_logk; ++i) {
+        double logk = logk_min + i*dlogk;
+        double k = pow(10.0, logk);
+        ks[i] = k;
+        solve_einstein_boltzmann(*c, k, transfer_functions[i]);
+    }
+}
+
+Array get_matter_tk(double *k, size_t k_len, double *z, size_t z_len) {
+    gsl_interp2d *matter_tk_interp = gsl_interp2d_alloc(gsl_interp2d_bilinear, num_k, num_loga);
+    double matter_tk[num_k*num_loga];
+    
+    // TODO: use gsl_interp2d_idx and gsl_interp2d_set
+    // TODO: the `matter_tk_interp` object could be computed during `calc_transfers` like the background
+    for (size_t i = 0; i < num_k; ++i) {
+        for (size_t j = 0; j < num_loga; ++j) {
+            matter_tk[j*num_k + i] = transfer_functions[i][j].delta_c;
+        }
+    }
+    
+    int status = gsl_interp2d_init(
+        matter_tk_interp,
+        ks,
+        bg.loga,
+        matter_tk,
+        num_k,
+        num_loga
+    );
+
+    if (status != GSL_SUCCESS) {
+        fprintf(stderr, "ERROR: could not initialize gsl_interp2d\n");
+        exit(1);
+    }
+    
+    double *data = calloc(k_len * z_len, sizeof(double));
+    if (data == NULL) {
+        fprintf(stderr, "ERROR: could not allocate memory for interpolation of matter tk\n");
+        exit(1);
+    }
+
+    gsl_interp_accel *xaccel = gsl_interp_accel_alloc();
+    gsl_interp_accel *yaccel = gsl_interp_accel_alloc();
+    
+    for (size_t i = 0; i < k_len; ++i) {
+        for (size_t j = 0; j < z_len; ++j) {
+            double loga = log(1.0/(1.0+z[j]));
+            int status = gsl_interp2d_eval_extrap_e(matter_tk_interp, ks, bg.loga, matter_tk, k[i], loga, xaccel, yaccel, &data[j*k_len + i]);
+            if (status != GSL_SUCCESS) printf("WARNING: in matter tk interpolation, gsl_interp_2d gave an error");
+        }
+    }
+
+    gsl_interp2d_free(matter_tk_interp);
+    gsl_interp_accel_free(xaccel);
+    gsl_interp_accel_free(yaccel);
+
+    return (Array) { .data = data, .len = k_len*z_len };
 }

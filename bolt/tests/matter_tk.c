@@ -15,8 +15,16 @@ int main() {
 
     InitCosmo(&c, h, Omega_m, Omega_b, A_s, n_s);
     calc_background(&c);
-    solve_einstein_boltzmann(c, 0.1);
-    printf("Hello, from Bolt! For h = %.2f, Omega_m = %.3f, \\delta_m(k=0.1, z=0) = %.6f\n", h, Omega_m, result[timesteps].delta_c);
+    calc_transfers(&c);
+    // printf("For k = %e, z = %f, \\delta_c = %e", ks[num_k-1], bg.z[timesteps], transfer_functions[num_k-1][timesteps].delta_c);
+    double z[] = {0.0, 0.5, 1.0};
+    double k[] = {1e-3, 1e-2, 1e-1};
+    Array tk = get_matter_tk(k, 3, z, 3);
+    for (int i = 0; i < 3; ++i) {
+        for (int j = 0; j < 3; ++j) {
+            printf("For k = %.3f, z = %.3f, \\delta_c = %.3f\n", k[i], z[j], tk.data[j*3 + i]);
+        }
+    }
 
     return 0;
 }

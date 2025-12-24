@@ -87,8 +87,7 @@ class Perturbations(ctypes.Structure):
 
 class Array(ctypes.Structure):
     _fields_ = [("data", ctypes.POINTER(ctypes.c_double)),
-                ("len", ctypes.c_int)]
-
+                ("len", ctypes.c_size_t)]
 
 def calc_background(c: Cosmo):
     libbolt.calc_background(ctypes.byref(c))
@@ -100,17 +99,27 @@ def get_comoving_distances(z_values):
     d_L = np.ctypeslib.as_array(result.data, shape=(result.len,)).copy()
     
     # Free C-allocated memory
-    libc.free(result.data)
+    libc.free(ctypes.cast(result.data, ctypes.c_void_p))
     
     return d_L
 
-def solve_einstein_boltzmann(c: Cosmo, k: float):
-    # TODO: libbolt.solve_einstein_boltzmann returns a pointer to a global variable, is this a good idea?
-    return libbolt.solve_einstein_boltzmann(c, k)
+def calc_transfers(c: Cosmo):
+    libbolt.calc_transfers(ctypes.byref(c))
 
-def integrate(c: Cosmo, k: float):
-    # Backwards compatibility
-    return solve_einstein_boltzmann(c, k)
+def get_matter_tk(k_values, z_values):
+    z_array = np.asarray(z_values, dtype=np.float64)
+    k_array = np.asarray(k_values, dtype=np.float64)
+    
+    result = libbolt.get_matter_tk(k_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(k_array), z_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(z_array))
+    
+    # Convert C buffer to a 1D numpy array, reshape into (z_len, k_len) as stored in C, then transpose
+    flat = np.ctypeslib.as_array(result.data, shape=(result.len,)).copy()
+    tk = flat.reshape((len(z_array), len(k_array))).T
+
+    # Free C-allocated memory
+    libc.free(result.data)
+
+    return tk
 
 # C function bindings
 libbolt.rho_m.argtypes = (Cosmo, ctypes.c_double)
@@ -128,10 +137,9 @@ libbolt.H_curly.restype = ctypes.c_double
 libbolt.InitCosmo.argtypes = [ctypes.POINTER(Cosmo), ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double]
 libbolt.calc_background.argtypes = [ctypes.POINTER(Cosmo)]
 libbolt.calc_background.restype = None
+libbolt.calc_transfers.argtypes = [ctypes.POINTER(Cosmo)]
+libbolt.calc_transfers.restype = None
 libbolt.get_comoving_distances.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
 libbolt.get_comoving_distances.restype = Array
-# TODO: interface dy_da
-# libbolt.dy_dloga.argtypes = [Cosmo, Perturbations, ctypes.c_double, ctypes.c_double]
-# libbolt.dy_dloga.restype = Perturbations
-libbolt.solve_einstein_boltzmann.argtypes = [Cosmo, ctypes.c_double]
-libbolt.solve_einstein_boltzmann.restype = ctypes.POINTER(Perturbations)    
+libbolt.get_matter_tk.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t, ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+libbolt.get_matter_tk.restype = Array

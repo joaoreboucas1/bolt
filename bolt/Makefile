@@ -34,9 +34,7 @@ test: bolt.c tests/matter_tk.c tests/matter_tk.py tests/distances.c tests/distan
 	@echo "Compiling transfer function test..."
 	gcc -o tests/matter_tk tests/matter_tk.c -lm -lgsl -lgslcblas -ggdb
 
-	
 	@echo "Executing transfer function test..."
-	@echo "Expected output:  Hello, from Bolt! For h = 0.67, Omega_m = 0.319, \delta_m(k=0.1, z=0) = -65266.918234"
 	@echo "Actual output C : `./tests/matter_tk; echo Status: $$?`"
 	@echo "Actual output Py: `python3 ./tests/matter_tk.py; echo Status: $$?`"
 
