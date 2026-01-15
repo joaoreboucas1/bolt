@@ -19,25 +19,10 @@ $(BUILD_FOLDER)/bolt.o: bolt.c
 	fi
 	gcc $(CFLAGS) -c -fpic bolt.c -o $(BUILD_FOLDER)/bolt.o
 
-# TODO: make a test suite. For now, this compiles a minimal executable.
-# In the future, I want to test the different features of Bolt.
 .PHONY: test
 test: bolt.c tests/matter_tk.c tests/matter_tk.py tests/distances.c tests/distances.py
+	python3 ./tests/run_tests.py
 	
-	@echo "Compiling distances test..."
-	gcc -o tests/distances tests/distances.c -lm -lgsl -lgslcblas -ggdb 
-	@echo "Executing distances test..."
-	@echo "Expected output:  z = 0.50, \chi = 1960.31 Mpc || z = 1.00, \chi = 3413.50 Mpc"
-	@echo "Actual output C : `./tests/distances; echo Status: $$?`"
-	@echo "Actual output Py: `python3 ./tests/distances.py; echo Status: $$?`"
-	
-	@echo "Compiling transfer function test..."
-	gcc -o tests/matter_tk tests/matter_tk.c -lm -lgsl -lgslcblas -ggdb
-
-	@echo "Executing transfer function test..."
-	@echo "Actual output C : `./tests/matter_tk; echo Status: $$?`"
-	@echo "Actual output Py: `python3 ./tests/matter_tk.py; echo Status: $$?`"
-
 bench: bolt.c tests/matter_tk
 	@echo "Benchmarking..."
 	gcc -o tests/matter_tk tests/matter_tk.c -lm -lgsl -lgslcblas -ggdb
