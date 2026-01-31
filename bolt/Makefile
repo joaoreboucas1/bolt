@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 CFLAGS=-Wall -Wextra -O3 -ffast-math
-LIBS=-lgsl -lgslcblas -lm
+LIBS=-lgsl -lgslcblas -lm -lgfortran
 # NOTE: adjust `GSL_LIB_PATH` and `GSL_INC_PATH` according to your installation
 # It is the path containing `libgsl.so.X` and `libgslcblas.so`
 GSL_LIB_PATH=/usr/local/lib
@@ -10,14 +10,17 @@ BUILD_FOLDER=build
 
 all: $(BUILD_FOLDER)/libbolt.so
 
-$(BUILD_FOLDER)/libbolt.so: $(BUILD_FOLDER)/bolt.o
-	gcc -shared -o $(BUILD_FOLDER)/libbolt.so $(BUILD_FOLDER)/bolt.o -I$(GSL_INC_PATH) -L$(GSL_LIB_PATH) -Wl,-rpath,$(GSL_LIB_PATH)/ $(LIBS)
+$(BUILD_FOLDER)/libbolt.so: $(BUILD_FOLDER)/bolt.o $(BUILD_FOLDER)/dverk.o
+	gcc -shared -o $(BUILD_FOLDER)/libbolt.so $(BUILD_FOLDER)/bolt.o $(BUILD_FOLDER)/dverk.o -I$(GSL_INC_PATH) -L$(GSL_LIB_PATH) -Wl,-rpath,$(GSL_LIB_PATH)/ $(LIBS)
 
 $(BUILD_FOLDER)/bolt.o: bolt.c
 	@if ! test -d $(BUILD_FOLDER); then \
 		mkdir $(BUILD_FOLDER); \
 	fi
 	gcc $(CFLAGS) -c -fpic bolt.c -o $(BUILD_FOLDER)/bolt.o
+
+$(BUILD_FOLDER)/dverk.o: dverk.f
+	gcc -c -fpic dverk.f -o $(BUILD_FOLDER)/dverk.o
 
 .PHONY: test
 test: bolt.c tests/matter_tk.c tests/matter_tk.py tests/distances.c tests/distances.py

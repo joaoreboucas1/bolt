@@ -16,6 +16,8 @@
 #include <gsl/gsl_interp2d.h>
 #include <gsl/gsl_errno.h>
 
+#include "integrators.c"
+
 // -------------------- Constants --------------------
 
 #define c_in_km_s 299792.458
@@ -73,6 +75,9 @@ typedef struct {
     double a_eq;
 } Cosmo;
 
+// Global variable that integrator can access
+static Cosmo c_global;
+
 void InitCosmo(Cosmo *c, double h, double Omega_m, double Omega_b, double A_s, double n_s) {
     const double H0 = 100*h/c_in_km_s;
     const double Omega_gamma = omega_gammah2/h/h;
@@ -92,6 +97,9 @@ void InitCosmo(Cosmo *c, double h, double Omega_m, double Omega_b, double A_s, d
         .Omega_gamma = Omega_gamma,
         .a_eq = Omega_gamma/Omega_m
     };
+
+    // NOTE: we have a global variable that holds the current cosmo object
+    c_global = *c;
 }
 
 // -------------------- Background functions --------------------
@@ -129,13 +137,13 @@ double H_curly(Cosmo c, double a) {
 }
 
 /*
-    `Background` is a type for the library's background tables.
-    The integration of perturbations requires the computation of several background functions.
-    The ultimate goal of the library is to calculate perturbation equations for several values of the Fourier wavenumber $k$.
-    We don't need to recalculate the background for each Fourier wavenumber, so we just do it once and save the results in background tables.
-    Then, we define GSL interpolators that can be reused in the perturbation equations as well as in the outputs of the library.
-*/
-// 
+ *  `Background` is a type for the library's background tables.
+ *  The integration of perturbations requires the computation of several background functions.
+ *  The ultimate goal of the library is to calculate perturbation equations for several values of the Fourier wavenumber $k$.
+ *  We don't need to recalculate the background for each Fourier wavenumber, so we just do it once and save the results in background tables.
+ *  Then, we define GSL interpolators that can be reused in the perturbation equations as well as in the outputs of the library.
+ */
+
 typedef struct {
     double loga[timesteps+1];
     double a[timesteps+1];
@@ -220,6 +228,8 @@ typedef struct {
     size_t len;
 } Array;
 
+// API function that gets the comoving distance in Mpc to a sources with redshift `z`, an array with length `z_len`.
+// Must be called after calling `calc_background()`. 
 Array get_comoving_distances(double *z, size_t z_len) {
     double *data = malloc(z_len*sizeof(double));
     if (data == NULL) {
@@ -237,14 +247,14 @@ Array get_comoving_distances(double *z, size_t z_len) {
     return (Array) { .data = data, .len = z_len };
 }
 
-
 // -------------------- Perturbations --------------------
 
 /*
-    Perturbations:
-        - `delta` denotes the density contrast;
-        - `theta` denotes the velocity divergence, $ \theta = k*v $;
-        - `Phi` is the Newtonian gauge gravitational potential;
+ *  The `Perturbations` struct fields:
+ *      - `delta` denotes the density contrast;
+ *      - `theta` denotes the velocity divergence, $ \theta = k*v $;
+ *      - `Phi` is the Newtonian gauge gravitational potential;
+ *  The suffix of each field is the species, e.g. `delta_c` is the CDM density contrast.
  */
 
 typedef struct {
@@ -278,25 +288,23 @@ Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
     return p;
 }
 
-// Struct that passes parameters to the ODE solver
-typedef struct {
-    Cosmo c;
-    double k;
-} ODE_Params;
+double k_global;
 
-// NOTE: In GSL, the derivative function must have the following signature:
-// int deriv(double t, const double y[], double dydt[], void *params)
+// Core function for the derivatives of scalar perturbations.
+// Functions for interfacing with specific integrator (e.g. GSL, DVERK) can be implemented in terms of this function
 static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in dy_da");
-int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
-    ODE_Params ode_params = *(ODE_Params*) params;
-    const Cosmo c = ode_params.c;
-    const double k = ode_params.k;
-    const double k2 = k*k;
+int dy_da(double a, Perturbations y, Perturbations *y_prime) {
+    // TODO: implement integrators.c so we can switch between DVERK and GSL
+    // TODO: make c a global variable
+    // TODO: make k a _Thread_local variable
+    
+    const double k2 = k_global*k_global;
     const double a2 = a*a;
+
     // TODO: we could use the background interpolators for these calculations
-    const double H = H_curly(c, a);
-    const double rho_m_now = rho_m(c, a);
-    const double rho_gamma_now = rho_gamma(c, a);
+    const double H = H_curly(c_global, a);
+    const double rho_m_now = rho_m(c_global, a);
+    const double rho_gamma_now = rho_gamma(c_global, a);
     const double sigma_gamma = 0.0; // TODO: implement anisotropic stress, for now it's zero
     
     const double Phi_prime   = -H*y.Phi + 0.5*a2*(rho_m_now*y.theta_c + rho_gamma_now*(1.0 + w_gamma)*y.theta_gamma)/k2;
@@ -317,16 +325,23 @@ int dy_da(double a, Perturbations y, Perturbations *y_prime, void *params) {
 }
 
 // Helper function that converts dy_da into dy_dloga
-int dy_dloga(double loga, Perturbations y, Perturbations *y_prime, void *params) {
+int dy_dloga(double loga, Perturbations y, Perturbations *y_prime) {
     const double a = exp(loga); // TODO: can we use the interpolation table?
-    dy_da(a, y, y_prime, params);
+    dy_da(a, y, y_prime);
     Perturbations_Scale(y_prime, a);
     return GSL_SUCCESS;
 }
 
-// Main function that will be passed to GSL
+// Helper function to convert `dy_dloga` to the GSL format
 int dy_dloga_gsl(double loga, const double y[], double y_prime[], void *params) {
-    return dy_dloga(loga, *(Perturbations*)y, (Perturbations*)y_prime, params);
+    (void)params;
+    return dy_dloga(loga, *(Perturbations*)y, (Perturbations*)y_prime);
+}
+
+// Helper function to convert `dy_dloga` to the DVERK format
+void dy_dloga_dverk(double *ndim, double *loga, const double *y, double *y_prime) {
+    (void)ndim;
+    dy_dloga(*loga, *(Perturbations*)y, (Perturbations*)y_prime);
 }
 
 static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in initial_conditions");
@@ -353,36 +368,27 @@ Perturbations initial_conditions(Cosmo c, double k) {
 // Solves the Einstein-Boltzmann system for a single value of `k`.
 // Stores the result in `result`, which must be an array of `Perturbations` of size `timesteps+1`
 void solve_einstein_boltzmann(Cosmo c, double k, Perturbations *result) {
-    const double dloga_int = -bg.loga[0]/timesteps;
-    Perturbations y_ini = initial_conditions(c, k);
-    ODE_Params params = (ODE_Params) {
-        .c = c,
-        .k = k
-    };
-
-    gsl_odeiv2_system sys = {
-        .function = dy_dloga_gsl,
-        .jacobian = NULL,
-        .dimension = (int)(sizeof(Perturbations)/sizeof(double)),
-        .params = (void*)&params
-    };
-    const double hstart = dloga_int;
-    const double epsabs = 1e-3;
-    const double epsrel = 0.0;
-    gsl_odeiv2_driver *driver = gsl_odeiv2_driver_alloc_y_new(&sys, gsl_odeiv2_step_rkf45, hstart, epsabs, epsrel);
-
+    int n_dim = (int)(sizeof(Perturbations)/sizeof(double));
+    double tol = 1e-3;
+    
+    integrator_opt opt = get_gsl_integrator(dy_dloga_gsl, tol, n_dim);
+    
+    const Perturbations y_ini = initial_conditions(c, k);
     Perturbations state = y_ini;
     result[0] = state;
-
+    
+    k_global = k; // NOTE: the derivative function only knows about k_global so we must set it
     double loga = bg.loga[0];
+    const double dloga_int = -bg.loga[0]/timesteps;
     for (int i = 0; i < timesteps; i++) {
         const double loga_next = loga + dloga_int;
-        gsl_odeiv2_driver_apply(driver, &loga, loga_next, (double*)&state);
-        // TODO: maybe consider fixed step?
-        // gsl_odeiv2_driver_apply_fixed_step(driver, &loga, dloga_int, 1, (double*)&state);
+        // gsl_odeiv2_driver_apply(driver, &loga, loga_next, (double*)&state);
+        integrate(&loga, (double*)&state, &loga_next, &opt);
+        
         result[i + 1] = state;
     }
-    gsl_odeiv2_driver_free(driver);
+    
+    integrator_free(opt);
 }
 
 // Bolt has a default array of `k` values in h/Mpc

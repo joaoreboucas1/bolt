@@ -19,7 +19,8 @@ def test_background():
         "gcc",
         "-o", "tests/distances",
         "tests/distances.c",
-        "-lm", "-lgsl", "-lgslcblas", "-ggdb"
+        "dverk.f",
+        "-lm", "-lgsl", "-lgslcblas", "-ggdb", "-lgfortran"
     ])
     if proc.returncode != 0:
         return TestResult.FAIL_COMPILE_C
@@ -46,7 +47,8 @@ def test_matter_tk():
         "gcc",
         "-o", "tests/matter_tk",
         "tests/matter_tk.c",
-        "-lm", "-lgsl", "-lgslcblas", "-ggdb"
+        "dverk.f",
+        "-lm", "-lgsl", "-lgslcblas", "-ggdb", "-lgfortran"
     ])
 
     if proc.returncode != 0: return TestResult.FAIL_COMPILE_C
