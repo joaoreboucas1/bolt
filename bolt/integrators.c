@@ -12,7 +12,7 @@
 
 
 /* Wrappers for function pointer types */
-typedef void (*func_dverk)(int *, double *, double *, double *);
+typedef void (*func_dverk)(int *, double *, const double *, double *);
 typedef int (*func_gsl)(double, const double *, double *, void *);
 
 /* DVERK interface */

@@ -288,16 +288,13 @@ Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
     return p;
 }
 
+// TODO: make `k_global` _Thread_local
 double k_global;
 
 // Core function for the derivatives of scalar perturbations.
 // Functions for interfacing with specific integrator (e.g. GSL, DVERK) can be implemented in terms of this function
 static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in dy_da");
-int dy_da(double a, Perturbations y, Perturbations *y_prime) {
-    // TODO: implement integrators.c so we can switch between DVERK and GSL
-    // TODO: make c a global variable
-    // TODO: make k a _Thread_local variable
-    
+int dy_da(double a, Perturbations y, Perturbations *y_prime) {    
     const double k2 = k_global*k_global;
     const double a2 = a*a;
 
@@ -339,7 +336,7 @@ int dy_dloga_gsl(double loga, const double y[], double y_prime[], void *params) 
 }
 
 // Helper function to convert `dy_dloga` to the DVERK format
-void dy_dloga_dverk(double *ndim, double *loga, const double *y, double *y_prime) {
+void dy_dloga_dverk(int *ndim, double *loga, const double *y, double *y_prime) {
     (void)ndim;
     dy_dloga(*loga, *(Perturbations*)y, (Perturbations*)y_prime);
 }
@@ -367,13 +364,17 @@ Perturbations initial_conditions(Cosmo c, double k) {
 
 // Solves the Einstein-Boltzmann system for a single value of `k`.
 // Stores the result in `result`, which must be an array of `Perturbations` of size `timesteps+1`
-void solve_einstein_boltzmann(Cosmo c, double k, Perturbations *result) {
+void solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
     int n_dim = (int)(sizeof(Perturbations)/sizeof(double));
     double tol = 1e-3;
     
-    integrator_opt opt = get_gsl_integrator(dy_dloga_gsl, tol, n_dim);
+    integrator_opt opt1 = get_gsl_integrator(dy_dloga_gsl, tol, n_dim);
+    // TODO: allocate `c` and `w` on the heap
+    double c[DVERK_C_CAPACITY];
+    double w[DVERK_W_CAPACITY];
+    integrator_opt opt2 = get_dverk_integrator(dy_dloga_dverk, tol, n_dim, 1, c, w);
     
-    const Perturbations y_ini = initial_conditions(c, k);
+    const Perturbations y_ini = initial_conditions(cosmo, k);
     Perturbations state = y_ini;
     result[0] = state;
     
@@ -382,13 +383,12 @@ void solve_einstein_boltzmann(Cosmo c, double k, Perturbations *result) {
     const double dloga_int = -bg.loga[0]/timesteps;
     for (int i = 0; i < timesteps; i++) {
         const double loga_next = loga + dloga_int;
-        // gsl_odeiv2_driver_apply(driver, &loga, loga_next, (double*)&state);
-        integrate(&loga, (double*)&state, &loga_next, &opt);
-        
+        integrate(&loga, (double*)&state, &loga_next, &opt2);
         result[i + 1] = state;
     }
     
-    integrator_free(opt);
+    integrator_free(opt1);
+    integrator_free(opt2);
 }
 
 // Bolt has a default array of `k` values in h/Mpc
