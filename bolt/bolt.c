@@ -223,6 +223,7 @@ void calc_background(Cosmo *c) {
 }
 
 // Interface with NumPy `np.array`
+// Functions that return `Array` allocate memory so the user needs to free `array.data`.
 typedef struct {
     double *data;
     size_t len;
@@ -369,10 +370,7 @@ void solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
     double tol = 1e-3;
     
     integrator_opt opt1 = get_gsl_integrator(dy_dloga_gsl, tol, n_dim);
-    // TODO: allocate `c` and `w` on the heap
-    double c[DVERK_C_CAPACITY];
-    double w[DVERK_W_CAPACITY];
-    integrator_opt opt2 = get_dverk_integrator(dy_dloga_dverk, tol, n_dim, 1, c, w);
+    integrator_opt opt2 = get_dverk_integrator(dy_dloga_dverk, tol, n_dim, 1);
     
     const Perturbations y_ini = initial_conditions(cosmo, k);
     Perturbations state = y_ini;
