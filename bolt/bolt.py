@@ -103,6 +103,43 @@ def get_comoving_distances(z_values):
     
     return d_L
 
+def calc_thermo(c: Cosmo):
+    libbolt.calc_thermo(ctypes.byref(c))
+
+def get_opacity(z_values):
+    z_array = np.asarray(z_values, dtype=np.float64)
+    result = libbolt.get_opacity(z_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(z_array))
+    # Convert C array to numpy array
+    opacity = np.ctypeslib.as_array(result.data, shape=(result.len,)).copy()
+    
+    # Free C-allocated memory
+    libc.free(ctypes.cast(result.data, ctypes.c_void_p))
+    
+    return opacity
+
+def get_visibility(z_values):
+    z_array = np.asarray(z_values, dtype=np.float64)
+    result = libbolt.get_visibility(z_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(z_array))
+    # Convert C array to numpy array
+    visibility = np.ctypeslib.as_array(result.data, shape=(result.len,)).copy()
+    
+    # Free C-allocated memory
+    libc.free(ctypes.cast(result.data, ctypes.c_void_p))
+    
+    return visibility
+
+def get_optical_depth(z_values):
+    z_array = np.asarray(z_values, dtype=np.float64)
+    result = libbolt.get_optical_depth(z_array.ctypes.data_as(ctypes.POINTER(ctypes.c_double)), len(z_array))
+    # Convert C array to numpy array
+    optical_depth = np.ctypeslib.as_array(result.data, shape=(result.len,)).copy()
+    
+    # Free C-allocated memory
+    libc.free(ctypes.cast(result.data, ctypes.c_void_p))
+    
+    return optical_depth
+
+
 def calc_transfers(c: Cosmo):
     libbolt.calc_transfers(ctypes.byref(c))
 
@@ -141,5 +178,11 @@ libbolt.calc_transfers.argtypes = [ctypes.POINTER(Cosmo)]
 libbolt.calc_transfers.restype = None
 libbolt.get_comoving_distances.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
 libbolt.get_comoving_distances.restype = Array
+libbolt.get_opacity.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+libbolt.get_opacity.restype = Array
+libbolt.get_visibility.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+libbolt.get_visibility.restype = Array
+libbolt.get_optical_depth.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
+libbolt.get_optical_depth.restype = Array
 libbolt.get_matter_tk.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t, ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
 libbolt.get_matter_tk.restype = Array

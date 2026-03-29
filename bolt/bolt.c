@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
 #include <math.h>
 #include <assert.h>
@@ -46,11 +47,11 @@
  *      - These tables are used to generate interpolators
  */
 
- // NOTE: the number of time points, including the initial and final times, is `timesteps + 1` 
-#define timesteps 999
-#define num_loga (timesteps+1)
-#define num_a num_loga
-const double tau_ini = 3e-4;
+ // NOTE: the number of time steps for background integration tables
+#define TIMESTEPS 999
+#define NUM_LOGA (TIMESTEPS+1)
+#define NUM_A NUM_LOGA
+#define TAU_INI 3e-4
 
 // -------------------- Model Interface --------------------
 
@@ -139,24 +140,45 @@ double H_curly(Cosmo c, double a) {
 /*
  *  `Background` is a type for the library's background tables.
  *  The integration of perturbations requires the computation of several background functions.
- *  The ultimate goal of the library is to calculate perturbation equations for several values of the Fourier wavenumber $k$.
- *  We don't need to recalculate the background for each Fourier wavenumber, so we just do it once and save the results in background tables.
- *  Then, we define GSL interpolators that can be reused in the perturbation equations as well as in the outputs of the library.
+ *  To calculate thermodynamics and perturbations equations, we must know several background quantities.
+ *  The first step of the program is to calculate them once and and save the results in background tables.
+ *  GSL interpolators are defined so that background quantities can be reused in the perturbation equations as well as in the outputs of the library.
  */
 
 typedef struct {
-    double loga[timesteps+1];
-    double a[timesteps+1];
-    double z[timesteps+1];
-    double tau[timesteps+1];
-    double H[timesteps+1];
-} Background;
+    double *loga;
+    double *a;
+    double *z;
+    double *tau;
+    double *H;
+    size_t num_timesteps;
+} BackgroundTable;
 
-Background bg;
+BackgroundTable background_table_alloc(size_t num_timesteps) {
+    const size_t num_members = offsetof(BackgroundTable, num_timesteps)/sizeof(double*);
+    assert(num_members == 5);
+    double *data = malloc(num_timesteps*sizeof(double)*num_members);
+    return (BackgroundTable) {
+        .loga          = data+0*num_timesteps,
+        .a             = data+1*num_timesteps,
+        .z             = data+2*num_timesteps,
+        .tau           = data+3*num_timesteps,
+        .H             = data+4*num_timesteps,
+        .num_timesteps = num_timesteps,
+    };
+}
+
+void background_table_free(BackgroundTable bg) {
+    if (bg.loga) free(bg.loga);
+}
+
+BackgroundTable bg;
 gsl_interp *tau_interpolator = NULL;
 gsl_interp *H_interpolator = NULL;
 
-double inverse_NormHubble_gsl_integration(double z, void* params) {
+// Integrand for computing \tau(a), must be of type `gsl_function` whose member `function` has this specific signature
+// See https://www.gnu.org/software/gsl/doc/html/roots.html#c.gsl_function
+double inverse_NormHubble_gsl(double z, void* params) {
     // NOTE: NormHubble = H(z)/H_0
     Cosmo c = *(Cosmo*)params;
     double a = 1.0/(1.0 + z);
@@ -164,62 +186,67 @@ double inverse_NormHubble_gsl_integration(double z, void* params) {
     return c.H0/H;
 }
 
+gsl_interp *apply_interpolator(double *x, double *y, size_t n) {
+    gsl_interp *interp = gsl_interp_alloc(gsl_interp_cspline, n);
+    if (gsl_interp_init(interp, x, y, n) != GSL_SUCCESS) {
+        fprintf(stderr, "ERROR: could not initialize tau interpolator\n");
+        return NULL;
+    }
+    return interp;
+}
+
 // Computes the background table and initializes GSL interpolators
-void calc_background(Cosmo *c) {
-    const double a_ini = c->H0*sqrt(c->Omega_gamma)*tau_ini + c->H0*c->H0*c->Omega_m*tau_ini*tau_ini/4.0;
-    bg.a[0] = a_ini;
+bool calc_background(Cosmo *c) {
+    const double a_ini = c->H0*sqrt(c->Omega_gamma)*TAU_INI + c->H0*c->H0*c->Omega_m*TAU_INI*TAU_INI/4.0;
+    if (bg.a == NULL) bg = background_table_alloc(NUM_LOGA);
+    bg.a[0]    = a_ini;
     bg.loga[0] = log(a_ini);
-    bg.z[0] = 1.0/a_ini - 1.0;
-    bg.tau[0] = tau_ini;
-    bg.H[0] = H_curly(*c, a_ini)/a_ini;
-    const double dloga_int = -bg.loga[0]/timesteps;
+    bg.z[0]    = 1.0/a_ini - 1.0;
+    bg.tau[0]  = TAU_INI;
+    bg.H[0]    = H_curly(*c, a_ini)/a_ini;
+    const double dloga_int = -bg.loga[0]/TIMESTEPS;
     
     // NOTE: \tau(z) - \tau(z_ini) = \int_{z}^{z_ini} dz/H(z)
-    double integral, abserr;
-    double cumulative_integral = 0.0;
-    gsl_integration_workspace *w = gsl_integration_workspace_alloc(timesteps);
+    // See https://www.gnu.org/software/gsl/doc/html/integration.html#c.gsl_integration_workspace
+    double integral, cumulative_integral = 0.0, abserr;
+    gsl_integration_workspace *workspace = gsl_integration_workspace_alloc(TIMESTEPS);
+    if (workspace == NULL) {
+        fprintf(stderr, "ERROR: could not allocate workspace in calc_background\n");
+        return false;
+    }
+
     gsl_function integrand;
-    integrand.function = &inverse_NormHubble_gsl_integration;
+    integrand.function = &inverse_NormHubble_gsl;
     integrand.params = (void*)c;
-    for (size_t i = 1; i < timesteps+1; ++i) {
+    for (size_t i = 1; i < NUM_LOGA; ++i) {
         bg.loga[i]  = bg.loga[i-1] + dloga_int;
         bg.a[i]     = exp(bg.loga[i]);
         bg.z[i]     = 1.0/bg.a[i] - 1.0;
         bg.H[i]     = H_curly(*c, bg.a[i])/bg.a[i];
-
+        
         // Performing \tau integration
-        int status = gsl_integration_qag(
-            &integrand,
-            bg.z[i], 
-            bg.z[i-1], 
-            0.0,  // abserr
-            1e-5, // relerr
-            timesteps, 
-            GSL_INTEG_GAUSS21, 
-            w,  
-            &integral, 
-            &abserr);
-        if (status != GSL_SUCCESS) {
-            fprintf(stderr, "ERROR: could not integrate background tau");
-            exit(1);
+        // See https://www.gnu.org/software/gsl/doc/html/integration.html#c.gsl_integration_qag
+        if (gsl_integration_qag(
+                &integrand, bg.z[i], bg.z[i-1], 
+                abserr, 1e-5,                           // abserr, relerr
+                TIMESTEPS, 
+                GSL_INTEG_GAUSS21, 
+                workspace,
+                &integral, 
+                &abserr) != GSL_SUCCESS) {
+            fprintf(stderr, "ERROR: during calc_background, gsl_integration_qag returned an error\n");
+            return false;
         }
+        
         cumulative_integral += integral;
-        bg.tau[i] = tau_ini + 1.0/c->H0*cumulative_integral; // 
+        bg.tau[i] = TAU_INI + 1.0/c->H0*cumulative_integral;
     }
+    gsl_integration_workspace_free(workspace);
 
-    if (tau_interpolator == NULL) tau_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
-    if (H_interpolator == NULL) H_interpolator = gsl_interp_alloc(gsl_interp_cspline, timesteps+1);
-    int status = gsl_interp_init(tau_interpolator, bg.loga, bg.tau, timesteps+1);
-    if (status != GSL_SUCCESS) {
-        fprintf(stderr, "ERROR: could not initialize tau interpolator\n");
-        exit(1);
-    }
-    status = gsl_interp_init(H_interpolator, bg.loga, bg.H, timesteps+1);
-    if (status != GSL_SUCCESS) {
-        fprintf(stderr, "ERROR: could not initialize Hubble factor interpolator\n");
-        exit(1);
-    }
-    gsl_integration_workspace_free(w);
+    // Initializing interpolators for future use, see gsl_interp_init(tau_interpolator, bg.loga, bg.tau, NUM_LOGA)
+    tau_interpolator = apply_interpolator(bg.loga, bg.tau, NUM_LOGA);
+    H_interpolator = apply_interpolator(bg.loga, bg.H, NUM_LOGA);
+    return true;
 }
 
 // Interface with NumPy `np.array`
@@ -242,7 +269,193 @@ Array get_comoving_distances(double *z, size_t z_len) {
         float a = 1.0/(1.0+z[i]);
         // TODO: error when out of bounds
         float result = gsl_interp_eval(tau_interpolator, bg.loga, bg.tau, log(a), accel); // tau(a)
-        data[i] = bg.tau[timesteps] - result;
+        data[i] = bg.tau[TIMESTEPS] - result;
+    }
+    gsl_interp_accel_free(accel);
+    return (Array) { .data = data, .len = z_len };
+}
+
+Array get_luminosity_distances(double *z, size_t z_len) {
+    Array distances = get_comoving_distances(z, z_len);
+    for (size_t i = 0; i < z_len; i++) {
+        distances.data[i] *= 1 + z[i];
+    }
+    return distances;
+}
+
+Array get_angular_diameter_distances(double *z, size_t z_len) {
+    Array distances = get_comoving_distances(z, z_len);
+    for (size_t i = 0; i < z_len; i++) {
+        distances.data[i] /= 1 + z[i];
+    }
+    return distances;
+}
+
+// -------------------- Thermodynamics --------------------
+
+/*
+ *  This part of the code computes the visibility and opacity functions
+ */
+
+typedef struct {
+    double visibility[NUM_LOGA];
+    double opacity[NUM_LOGA];
+} Thermodynamics;
+
+#define apery 1.2020569031
+#define eta 1e-9
+#define me 0.510998e6 // eV
+#define B_H 13.6      // eV
+#define kelvin_to_ev 8.61732e-5
+#define T_CMB 2.7255*kelvin_to_ev
+#define chbar 197326980.0e-15 * 3.24e-23 // ev*Mpc
+#define Y_he 0.24
+#define sigma_T 6.6524e-25 * (3.24e-25)*(3.24e-25) // Mpc^2
+#define pi 3.1415926535
+
+typedef struct {
+    double *opacity;
+    double *visibility;
+    double *optical_depth;
+    size_t num_timesteps;
+} ThermoTable;
+
+ThermoTable thermo_table_alloc(size_t num_timesteps) {
+    const size_t num_members = offsetof(ThermoTable, num_timesteps)/sizeof(double*);
+    assert(num_members == 3);
+    double *data = malloc(num_timesteps*sizeof(double)*num_members);
+    return (ThermoTable) {
+        .opacity       = data+0*num_timesteps,
+        .visibility    = data+1*num_timesteps,
+        .optical_depth = data+2*num_timesteps,
+        .num_timesteps = num_timesteps,
+    };
+}
+
+void thermo_table_free(ThermoTable thermo) {
+    if (thermo.opacity) free(thermo.opacity);
+}
+
+ThermoTable thermo;
+gsl_interp *opacity_interpolator = NULL;
+gsl_interp *visibility_interpolator = NULL;
+gsl_interp *optical_depth_interpolator = NULL;
+
+
+double get_saha_x_e(double a) {
+    double T = T_CMB/a;
+    // NOTE: implementing manual freeze-out
+    const double T_g = 0.24; // eV
+    const double a_g = T_CMB/T_g;
+    if (T < T_g) return get_saha_x_e(a_g);
+    double lhs = 2*apery*eta/(pi*pi) * pow(2*pi*T/me, 1.5) * exp(B_H/T);
+    double x_e = (sqrt(1 + 4*lhs) - 1)/(2*lhs);
+    return x_e;
+}
+
+double phot_number_density(double a) {
+    double T = T_CMB/a;
+    return 2*apery*T*T*T/(pi*pi)/pow(chbar, 3.0); // 1/Mpc^3
+}
+
+double collision_rate(double a) {
+    double x_e = get_saha_x_e(a);
+    double n_gamma = phot_number_density(a);
+    double n_e = x_e*(1 - Y_he)*eta*n_gamma;
+    return a*n_e*sigma_T;
+}
+
+double collision_rate_gsl(double loga, void *params) {
+    Cosmo c = *(Cosmo*) params;
+    double a = exp(loga);
+    double kappa_prime = collision_rate(a);
+    return kappa_prime/H_curly(c, a);
+}
+
+bool calc_thermo(Cosmo *c) {
+    thermo_table_free(thermo);
+    thermo = thermo_table_alloc(NUM_LOGA);
+    gsl_function integrand;
+    integrand.function = &collision_rate_gsl;
+    integrand.params = (void*)c;
+    gsl_integration_workspace *workspace = gsl_integration_workspace_alloc(TIMESTEPS);
+    if (workspace == NULL) {
+        fprintf(stderr, "ERROR: could not allocate workspace in calc_background\n");
+        return false;
+    }
+    double integral, abserr;
+    thermo.opacity[0] = collision_rate(bg.a[0]);
+    thermo.optical_depth[NUM_LOGA - 1] = 0.0;
+    for (size_t i = 1; i < NUM_LOGA; i++) {
+        thermo.opacity[i] = collision_rate(bg.a[i]);
+        // NOTE: kappa(\tau) = \int_{\tau}^{\tau_0} \kappa'(\tau) d\tau
+        if (gsl_integration_qag(
+                &integrand, bg.loga[i], bg.loga[NUM_LOGA - 1], 
+                0.0, 1e-2,                           // abserr, relerr
+                TIMESTEPS, 
+                GSL_INTEG_GAUSS21, 
+                workspace,
+                &integral, 
+                &abserr) != GSL_SUCCESS) {
+            fprintf(stderr, "ERROR: during calc_thermo, gsl_integration_qag returned an error\n");
+            return false;
+        }
+        thermo.optical_depth[i] = integral;
+        thermo.visibility[i] = thermo.opacity[i] * exp(-thermo.optical_depth[i]);
+    }
+    gsl_integration_workspace_free(workspace);
+    
+    opacity_interpolator = apply_interpolator(bg.loga, thermo.opacity, NUM_LOGA);
+    visibility_interpolator = apply_interpolator(bg.loga, thermo.visibility, NUM_LOGA);
+    optical_depth_interpolator = apply_interpolator(bg.loga, thermo.optical_depth, NUM_LOGA);
+
+    return true;
+}
+
+Array get_opacity(double *z, size_t z_len) {
+    double *data = malloc(z_len*sizeof(double));
+    if (data == NULL) {
+        fprintf(stderr, "ERROR: could not allocate memory for opacity\n");
+        exit(1);
+    }
+    gsl_interp_accel *accel = gsl_interp_accel_alloc();
+    for (size_t i = 0; i < z_len; ++i) {
+        float a = 1.0/(1.0+z[i]);
+        // TODO: error when out of bounds
+        data[i] = gsl_interp_eval(opacity_interpolator, bg.loga, thermo.opacity, log(a), accel);
+    }
+    gsl_interp_accel_free(accel);
+    return (Array) { .data = data, .len = z_len };
+}
+
+Array get_visibility(double *z, size_t z_len) {
+    double *data = malloc(z_len*sizeof(double));
+    if (data == NULL) {
+        fprintf(stderr, "ERROR: could not allocate memory for visibility\n");
+        exit(1);
+    }
+    gsl_interp_accel *accel = gsl_interp_accel_alloc();
+    for (size_t i = 0; i < z_len; ++i) {
+        float a = 1.0/(1.0+z[i]);
+        // TODO: error when out of bounds
+        data[i] = gsl_interp_eval(visibility_interpolator, bg.loga, thermo.visibility, log(a), accel);
+        data[i] /= c_global.H0;
+    }
+    gsl_interp_accel_free(accel);
+    return (Array) { .data = data, .len = z_len };
+}
+
+Array get_optical_depth(double *z, size_t z_len) {
+    double *data = malloc(z_len*sizeof(double));
+    if (data == NULL) {
+        fprintf(stderr, "ERROR: could not allocate memory for optical depth\n");
+        exit(1);
+    }
+    gsl_interp_accel *accel = gsl_interp_accel_alloc();
+    for (size_t i = 0; i < z_len; ++i) {
+        float a = 1.0/(1.0+z[i]);
+        // TODO: error when out of bounds
+        data[i] = gsl_interp_eval(optical_depth_interpolator, bg.loga, thermo.optical_depth, log(a), accel);
     }
     gsl_interp_accel_free(accel);
     return (Array) { .data = data, .len = z_len };
@@ -349,7 +562,7 @@ Perturbations initial_conditions(Cosmo c, double k) {
     const double C = 1.0; // Arbitrary scale of adiabatic initial conditions
     const double Phi_ini = 4.0*C/3.0; // Primordial curvature perturbation
     const double delta_gamma_ini = -2.0*Phi_ini;
-    const double theta_gamma_ini = 0.5*k2*tau_ini*Phi_ini;
+    const double theta_gamma_ini = 0.5*k2*TAU_INI*Phi_ini;
     const double delta_c_ini = 3.0*delta_gamma_ini/4.0;
     const double theta_c_ini = theta_gamma_ini;
 
@@ -378,8 +591,8 @@ void solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
     
     k_global = k; // NOTE: the derivative function only knows about k_global so we must set it
     double loga = bg.loga[0];
-    const double dloga_int = -bg.loga[0]/timesteps;
-    for (int i = 0; i < timesteps; i++) {
+    const double dloga_int = -bg.loga[0]/TIMESTEPS;
+    for (int i = 0; i < TIMESTEPS; i++) {
         const double loga_next = loga + dloga_int;
         integrate(&loga, (double*)&state, &loga_next, &opt2);
         result[i + 1] = state;
@@ -398,7 +611,7 @@ void solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
 static_assert(num_logk > 1);
 
 // Buffer to store the result of `compute_transfers`
-Perturbations transfer_functions[num_logk][timesteps+1];
+Perturbations transfer_functions[num_logk][NUM_LOGA];
 double ks[num_logk];
 
 void calc_transfers(Cosmo *c) {
@@ -412,13 +625,13 @@ void calc_transfers(Cosmo *c) {
 }
 
 Array get_matter_tk(double *k, size_t k_len, double *z, size_t z_len) {
-    gsl_interp2d *matter_tk_interp = gsl_interp2d_alloc(gsl_interp2d_bilinear, num_k, num_loga);
-    double matter_tk[num_k*num_loga];
+    gsl_interp2d *matter_tk_interp = gsl_interp2d_alloc(gsl_interp2d_bilinear, num_k, NUM_LOGA);
+    double matter_tk[num_k*NUM_LOGA];
     
     // TODO: use gsl_interp2d_idx and gsl_interp2d_set
     // TODO: the `matter_tk_interp` object could be computed during `calc_transfers` like the background
     for (size_t i = 0; i < num_k; ++i) {
-        for (size_t j = 0; j < num_loga; ++j) {
+        for (size_t j = 0; j < NUM_LOGA; ++j) {
             matter_tk[j*num_k + i] = transfer_functions[i][j].delta_c;
         }
     }
@@ -429,7 +642,7 @@ Array get_matter_tk(double *k, size_t k_len, double *z, size_t z_len) {
         bg.loga,
         matter_tk,
         num_k,
-        num_loga
+        NUM_LOGA
     );
 
     if (status != GSL_SUCCESS) {

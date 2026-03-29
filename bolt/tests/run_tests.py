@@ -42,6 +42,34 @@ def test_background():
 
     return TestResult.SUCCESS
 
+def test_thermo():
+    proc = subprocess.run([
+        "gcc",
+        "-o", "tests/thermo",
+        "tests/thermo.c",
+        "dverk.f",
+        "-lm", "-lgsl", "-lgslcblas", "-ggdb", "-lgfortran"
+    ])
+    if proc.returncode != 0:
+        return TestResult.FAIL_COMPILE_C
+    
+    expected = "At z = 1300, \\kappa'(z) = 0.16246, \\kappa(z) = 1.44998, g(z)/H_0 = 170.281\n"
+    proc = subprocess.run(["./tests/thermo"], capture_output=True)
+    if proc.returncode != 0:
+        return TestResult.FAIL_RUN_C
+    
+    if not proc.stdout.decode("utf-8") == expected:
+        return TestResult.UNEXPECTED_OUTPUT_C
+    
+    proc = subprocess.run(["python3", "./tests/thermo.py"], capture_output=True)
+    if proc.returncode != 0:
+        return TestResult.FAIL_RUN_PY
+
+    if not proc.stdout.decode("utf-8") == expected:
+        return TestResult.UNEXPECTED_OUTPUT_PY
+
+    return TestResult.SUCCESS
+
 def test_matter_tk():
     proc = subprocess.run([
         "gcc",
@@ -65,6 +93,7 @@ def test_matter_tk():
 
 tests = {
     "comoving distances": test_background,
+    "thermodynamics": test_thermo,
     "matter transfer function": test_matter_tk
 }
 
