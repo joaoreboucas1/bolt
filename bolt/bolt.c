@@ -258,6 +258,7 @@ typedef struct {
 
 // API function that gets the comoving distance in Mpc to a sources with redshift `z`, an array with length `z_len`.
 // Must be called after calling `calc_background()`. 
+// TODO: this `get_` function is copy-pasted a lot and could be abstracted
 Array get_comoving_distances(double *z, size_t z_len) {
     double *data = malloc(z_len*sizeof(double));
     if (data == NULL) {
@@ -439,7 +440,6 @@ Array get_visibility(double *z, size_t z_len) {
         float a = 1.0/(1.0+z[i]);
         // TODO: error when out of bounds
         data[i] = gsl_interp_eval(visibility_interpolator, bg.loga, thermo.visibility, log(a), accel);
-        data[i] /= c_global.H0;
     }
     gsl_interp_accel_free(accel);
     return (Array) { .data = data, .len = z_len };
@@ -602,22 +602,22 @@ void solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
     integrator_free(opt2);
 }
 
-// Bolt has a default array of `k` values in h/Mpc
-#define logk_min -3.0
-#define logk_max 0
-#define num_logk 10
-#define num_k num_logk
-#define dlogk (logk_max - logk_min)/(num_logk-1)
-static_assert(num_logk > 1);
+// Bolt has a default array of `k` values in 1/Mpc
+#define LOGK_MIN -3.0
+#define LOGK_MAX 0
+#define NUM_LOGK 100
+#define NUM_K NUM_LOGK
+#define dlogk (LOGK_MAX - LOGK_MIN)/(NUM_LOGK-1)
+static_assert(NUM_LOGK > 1);
 
 // Buffer to store the result of `compute_transfers`
-Perturbations transfer_functions[num_logk][NUM_LOGA];
-double ks[num_logk];
+Perturbations transfer_functions[NUM_K][NUM_LOGA];
+double ks[NUM_K];
 
 void calc_transfers(Cosmo *c) {
     // TODO: this can be parallelized
-    for (size_t i = 0; i < num_logk; ++i) {
-        double logk = logk_min + i*dlogk;
+    for (size_t i = 0; i < NUM_LOGK; ++i) {
+        double logk = LOGK_MIN + i*dlogk;
         double k = pow(10.0, logk);
         ks[i] = k;
         solve_einstein_boltzmann(*c, k, transfer_functions[i]);
@@ -625,14 +625,14 @@ void calc_transfers(Cosmo *c) {
 }
 
 Array get_matter_tk(double *k, size_t k_len, double *z, size_t z_len) {
-    gsl_interp2d *matter_tk_interp = gsl_interp2d_alloc(gsl_interp2d_bilinear, num_k, NUM_LOGA);
-    double matter_tk[num_k*NUM_LOGA];
+    gsl_interp2d *matter_tk_interp = gsl_interp2d_alloc(gsl_interp2d_bilinear, NUM_K, NUM_LOGA);
+    double matter_tk[NUM_K*NUM_LOGA];
     
     // TODO: use gsl_interp2d_idx and gsl_interp2d_set
     // TODO: the `matter_tk_interp` object could be computed during `calc_transfers` like the background
-    for (size_t i = 0; i < num_k; ++i) {
+    for (size_t i = 0; i < NUM_K; ++i) {
         for (size_t j = 0; j < NUM_LOGA; ++j) {
-            matter_tk[j*num_k + i] = transfer_functions[i][j].delta_c;
+            matter_tk[j*NUM_K + i] = transfer_functions[i][j].delta_c;
         }
     }
     
@@ -641,7 +641,7 @@ Array get_matter_tk(double *k, size_t k_len, double *z, size_t z_len) {
         ks,
         bg.loga,
         matter_tk,
-        num_k,
+        NUM_K,
         NUM_LOGA
     );
 

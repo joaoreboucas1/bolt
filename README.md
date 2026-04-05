@@ -1,11 +1,11 @@
 # Bolt
 
 > [!Warning]
-> This code is made for didactical purposes only, and should not be used for serious scientific applications (yet?). For scientific applications, use [CAMB](https://github.com/cmbant/CAMB).
+> This code is made for didactical purposes only, and should not be used for serious scientific applications. For scientific applications, use [CAMB](https://github.com/cmbant/CAMB).
 
-A library for linear cosmological perturbations. The library calculates simple transfer functions for the $\Lambda$CDM model, and can be used to calculate the CDM power spectrum. We make serious simplifying assumptions which hopefully will be slowly addressed in the future.
+A library for linear cosmological perturbations. The library calculates simple transfer functions for the $\Lambda$CDM model, and can be used to calculate the CDM power spectrum. The code is written in C and has Python bindings. The code has serious simplifying assumptions which will be slowly addressed in the future.
 
-See an example of usage in `docs/examples.ipynb`.
+Examples of usage are given in the `examples/` folder. The `bolt/tests/` folder provides minimal examples suitable for test cases.
 
 ## Installation
 
@@ -48,7 +48,7 @@ To test the installation, you can run the `docs/examples.ipynb` Jupyter notebook
 
 The core of the library is `bolt.c`, containing all of the background functions and linear perturbation equations. The C code is compiled to a shared object (`bolt/build/libbolt.so`). The Python library `bolt.py` is an interface to the C code with a few helper functions.
 
-The library was initially inspired in another [project](https://github.com/joaoreboucas1/einstein_boltzmann) which is reimplmented in `pybolt.py`. Do not confuse `pybolt` with `bolt.py`. I use `pybolt` as a study to see how I want to implement things in C for `bolt`. `pybolt` can be used from a Python environment with `scipy` and `numpy`.
+The library was initially inspired in another [project](https://github.com/joaoreboucas1/einstein_boltzmann).
 
 ## References
 - [Cosmological Perturbation Equations in the Synchronous and Conformal Newtonian Gauges](https://arxiv.org/pdf/astro-ph/9506072), by C.-P. Ma and E. Bertschinger

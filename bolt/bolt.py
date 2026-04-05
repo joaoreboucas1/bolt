@@ -25,7 +25,7 @@ except OSError as e:
 # TODO: the .so does not export macros. How can we get constants?
 with open(f"{path}/bolt.c", "r") as f:
     for line in f.read().splitlines():
-        if line.startswith("#define timesteps"):
+        if line.startswith("#define TIMESTEPS"):
             timesteps = int(line.split()[-1])
 
 class Cosmo(ctypes.Structure):
