@@ -15,7 +15,10 @@ int main() {
 
     InitCosmo(&c, h, Omega_m, Omega_b, A_s, n_s);
     calc_background(&c);
-    calc_transfers(&c);
+    calc_thermo(&c);
+    printf("Tight coupling max scale factor = %f (log_a = %f)\n", a_tight_coupling, log(a_tight_coupling));
+    // a_tight_coupling = 1.0;
+    if (!calc_transfers(&c)) return 1;
     // printf("For k = %e, z = %f, \\delta_c = %e", ks[num_k-1], bg.z[timesteps], transfer_functions[num_k-1][timesteps].delta_c);
     double z[] = {0.0, 0.5, 1.0};
     double k[] = {1e-3, 1e-2, 1e-1};

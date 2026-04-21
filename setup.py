@@ -28,7 +28,7 @@ setup(
     long_description_content_type='text/markdown',
     url='https://github.com/joaoreboucas1/bolt',
     classifiers=[
-        'Development Status :: 1 - Planning',
+        'Development Status :: 3 - Alpha',
         'Programming Language :: Python :: 3',
         'Programming Language :: C',
         'License :: OSI Approved :: MIT License',

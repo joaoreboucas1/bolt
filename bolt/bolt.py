@@ -159,23 +159,24 @@ def get_matter_tk(k_values, z_values):
     return tk
 
 # C function bindings
+# TODO: is there a way to generate the function bindings automatically?
 libbolt.rho_m.argtypes = (Cosmo, ctypes.c_double)
 libbolt.rho_m.restype = ctypes.c_double
 libbolt.rho_gamma.argtypes = (Cosmo, ctypes.c_double)
 libbolt.rho_gamma.restype = ctypes.c_double
-libbolt.rho_lambda.argtypes = (Cosmo, ctypes.c_double)
-libbolt.rho_lambda.restype = ctypes.c_double
+libbolt.rho_Lambda.argtypes = (Cosmo, ctypes.c_double)
+libbolt.rho_Lambda.restype = ctypes.c_double
 libbolt.rho_tot.argtypes = (Cosmo, ctypes.c_double)
 libbolt.rho_tot.restype = ctypes.c_double
-libbolt.P.argtypes = (Cosmo, ctypes.c_double)
-libbolt.P.restype = ctypes.c_double
+libbolt.P_tot.argtypes = (Cosmo, ctypes.c_double)
+libbolt.P_tot.restype = ctypes.c_double
 libbolt.H_curly.argtypes = (Cosmo, ctypes.c_double)
 libbolt.H_curly.restype = ctypes.c_double
 libbolt.InitCosmo.argtypes = [ctypes.POINTER(Cosmo), ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_double]
 libbolt.calc_background.argtypes = [ctypes.POINTER(Cosmo)]
 libbolt.calc_background.restype = None
 libbolt.calc_transfers.argtypes = [ctypes.POINTER(Cosmo)]
-libbolt.calc_transfers.restype = None
+libbolt.calc_transfers.restype = bool
 libbolt.get_comoving_distances.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]
 libbolt.get_comoving_distances.restype = Array
 libbolt.get_opacity.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_size_t]

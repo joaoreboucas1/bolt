@@ -112,25 +112,33 @@ void InitCosmo(Cosmo *c, double h, double Omega_m, double Omega_b, double A_s, d
  *      - `H_curly` is the conformal Hubble factor.
  */
 
+double rho_c(Cosmo c, double a) {
+    return c.rho_crit*c.Omega_c/a/a/a;
+}
+
+double rho_b(Cosmo c, double a) {
+    return c.rho_crit*c.Omega_b/a/a/a;
+}
+
 double rho_m(Cosmo c, double a) {
-    return c.rho_crit*c.Omega_m/a/a/a;
+    return rho_c(c, a) + rho_b(c, a);
 }
 
 double rho_gamma(Cosmo c, double a) {
     return c.rho_crit*c.Omega_gamma/a/a/a/a;
 }
 
-double rho_lambda(Cosmo c, double a) {
+double rho_Lambda(Cosmo c, double a) {
     (void) a;
     return c.rho_crit*c.Omega_Lambda;
 }
 
 double rho_tot(Cosmo c, double a) {
-    return c.rho_crit*(c.Omega_gamma/a/a/a/a + c.Omega_m/a/a/a + c.Omega_Lambda);
+    return rho_m(c, a) + rho_gamma(c, a) + rho_Lambda(c, a);
 }
 
-double P(Cosmo c, double a) {
-    return c.rho_crit*(w_gamma*c.Omega_gamma/a/a/a/a + w_m*c.Omega_m/a/a/a + w_Lambda*c.Omega_Lambda);
+double P_tot(Cosmo c, double a) {
+    return w_m*rho_m(c, a) + w_gamma*rho_gamma(c, a) + w_Lambda*rho_Lambda(c, a);
 }
 
 double H_curly(Cosmo c, double a) {
@@ -341,22 +349,34 @@ ThermoTable thermo;
 gsl_interp *opacity_interpolator = NULL;
 gsl_interp *visibility_interpolator = NULL;
 gsl_interp *optical_depth_interpolator = NULL;
-
+double a_tight_coupling = 0.0;
 
 double get_saha_x_e(double a) {
     double T = T_CMB/a;
+    
     // NOTE: implementing manual freeze-out
     const double T_g = 0.24; // eV
     const double a_g = T_CMB/T_g;
+
     if (T < T_g) return get_saha_x_e(a_g);
+    
     double lhs = 2*apery*eta/(pi*pi) * pow(2*pi*T/me, 1.5) * exp(B_H/T);
-    double x_e = (sqrt(1 + 4*lhs) - 1)/(2*lhs);
+    
+    double x_e;
+    if (lhs > 1e6) {
+        x_e = 1.0/sqrt(lhs);
+    } else if (lhs < 1e-6) {
+        x_e = 1.0;
+    } else {
+        x_e = (sqrt(1 + 4*lhs) - 1)/(2*lhs);
+    }
+    
     return x_e;
 }
 
 double phot_number_density(double a) {
     double T = T_CMB/a;
-    return 2*apery*T*T*T/(pi*pi)/pow(chbar, 3.0); // 1/Mpc^3
+    return 2*apery*T*T*T/(pi*pi)/(chbar*chbar*chbar); // 1/Mpc^3
 }
 
 double collision_rate(double a) {
@@ -403,6 +423,7 @@ bool calc_thermo(Cosmo *c) {
         }
         thermo.optical_depth[i] = integral;
         thermo.visibility[i] = thermo.opacity[i] * exp(-thermo.optical_depth[i]);
+        if (thermo.opacity[i] > bg.a[i]*bg.H[i]) a_tight_coupling = bg.a[i];
     }
     gsl_integration_workspace_free(workspace);
     
@@ -474,27 +495,33 @@ Array get_optical_depth(double *z, size_t z_len) {
 typedef struct {
     double delta_c;
     double theta_c;
+    double delta_b;
+    double theta_b;
     double delta_gamma;
     double theta_gamma;
     double Phi;
 } Perturbations;
 
 // Convenience function to multiply `Perturbation` by some factor
-static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Scale");
+static_assert(sizeof(Perturbations) == 7*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Scale");
 void Perturbations_Scale(Perturbations *p, double s) {
     p->delta_c *= s;
     p->theta_c *= s;
+    p->delta_b *= s;
+    p->theta_b *= s;
     p->delta_gamma *= s;
     p->theta_gamma *= s;
     p->Phi *= s;
 }
 
 // Convenience function to add two `Perturbation`s
-static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Add");
+static_assert(sizeof(Perturbations) == 7*sizeof(double), "Exhaustive handling of Perturbations in Perturbations_Add");
 Perturbations Perturbations_Add(Perturbations a, Perturbations b) {
     Perturbations p = (Perturbations) {
         .delta_c = a.delta_c + b.delta_c,
         .theta_c = a.theta_c + b.theta_c,
+        .delta_b = a.delta_b + b.delta_b,
+        .theta_b = a.theta_b + b.theta_b,
         .delta_gamma = a.delta_gamma + b.delta_gamma,
         .theta_gamma = a.theta_gamma + b.theta_gamma,
         .Phi = a.Phi + b.Phi,
@@ -507,26 +534,48 @@ double k_global;
 
 // Core function for the derivatives of scalar perturbations.
 // Functions for interfacing with specific integrator (e.g. GSL, DVERK) can be implemented in terms of this function
-static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in dy_da");
+static_assert(sizeof(Perturbations) == 7*sizeof(double), "Exhaustive handling of Perturbations in dy_da");
 int dy_da(double a, Perturbations y, Perturbations *y_prime) {    
     const double k2 = k_global*k_global;
     const double a2 = a*a;
 
     // TODO: we could use the background interpolators for these calculations
     const double H = H_curly(c_global, a);
-    const double rho_m_now = rho_m(c_global, a);
+    const double rho_c_now = rho_c(c_global, a);
+    const double rho_b_now = rho_b(c_global, a);
     const double rho_gamma_now = rho_gamma(c_global, a);
+    const double rho_tot_now = rho_tot(c_global, a);
+    const double P_tot_now = P_tot(c_global, a);
     const double sigma_gamma = 0.0; // TODO: implement anisotropic stress, for now it's zero
-    
-    const double Phi_prime   = -H*y.Phi + 0.5*a2*(rho_m_now*y.theta_c + rho_gamma_now*(1.0 + w_gamma)*y.theta_gamma)/k2;
+    const double collision_rate_now = 0.0;
+    // const double collision_rate_now = collision_rate(a); // TODO: implement tight coupling
+
+    // TODO: some of these equation implicitly assume \Phi = \Psi, but when anisotropic stress is not negligible then this will be false.
+    const double Phi_prime   = -H*y.Phi + 0.5*a2*(rho_c_now*y.theta_c + rho_b_now*y.theta_b + rho_gamma_now*(1.0 + w_gamma)*y.theta_gamma)/k2;
     const double delta_c_prime = -y.theta_c + 3.0*Phi_prime;
     const double theta_c_prime = -H*y.theta_c + k2 * y.Phi;
-    const double delta_gamma_prime = -4.0*y.theta_gamma/3.0 + 4.0*Phi_prime;
-    const double theta_gamma_prime = k2*(y.delta_gamma/4.0 - sigma_gamma) + k2*y.Phi;
+
+    double delta_b_prime= -y.theta_b + 3.0*Phi_prime;;
+    double delta_gamma_prime = -4.0*y.theta_gamma/3.0 + 4.0*Phi_prime;;
+    double theta_b_prime;
+    double theta_gamma_prime;
+    if (a > a_tight_coupling) {
+        theta_b_prime = -H*y.theta_b + k2 * y.Phi + 4.0*rho_gamma_now/3.0/rho_b_now*collision_rate_now*(y.theta_gamma - y.theta_b); // TODO: implement baryon sound speed
+        theta_gamma_prime = k2*(y.delta_gamma/4.0 - sigma_gamma) + k2*y.Phi + collision_rate_now*(y.theta_b - y.theta_gamma);
+    } else {
+        // Tight coupling approximation
+        const double R = 4.0*rho_gamma_now/3.0/rho_b_now;
+        const double ddota_over_a = -a*a*(rho_tot_now - 3.0*P_tot_now)/6.0; // TODO: double check this equation
+        const double slip = 2*R*H*(y.theta_b - y.theta_gamma) + collision_rate_now/(1.0+R)*(-ddota_over_a*y.theta_b - H*k2*(y.theta_gamma/2 + y.Phi) + k2*(-delta_gamma_prime/4)); // TODO: add baryon sound speed
+        theta_b_prime = k2*y.Phi - H*y.theta_b/(1.0 + R) + k2*R*(y.delta_gamma/4 - sigma_gamma - R*slip)/(1.0 + R); // TODO: add baryon sound speed
+        theta_gamma_prime = -(theta_b_prime + H*y.theta_b)/R + k2*(y.theta_gamma/4 - sigma_gamma) + (1.0 + R)/R*k2*y.Phi; // TODO: add baryon sound speed
+    }
 
     *y_prime = (Perturbations) {
        .delta_c = delta_c_prime,
        .theta_c = theta_c_prime,
+       .delta_b = delta_b_prime,
+       .theta_b = theta_b_prime,
        .delta_gamma = delta_gamma_prime,
        .theta_gamma = theta_gamma_prime,
        .Phi = Phi_prime,
@@ -555,7 +604,7 @@ void dy_dloga_dverk(int *ndim, double *loga, const double *y, double *y_prime) {
     dy_dloga(*loga, *(Perturbations*)y, (Perturbations*)y_prime);
 }
 
-static_assert(sizeof(Perturbations) == 5*sizeof(double), "Exhaustive handling of Perturbations in initial_conditions");
+static_assert(sizeof(Perturbations) == 7*sizeof(double), "Exhaustive handling of Perturbations in initial_conditions");
 Perturbations initial_conditions(Cosmo c, double k) {
     (void) c;
     const double k2 = k*k;
@@ -565,6 +614,8 @@ Perturbations initial_conditions(Cosmo c, double k) {
     const double theta_gamma_ini = 0.5*k2*TAU_INI*Phi_ini;
     const double delta_c_ini = 3.0*delta_gamma_ini/4.0;
     const double theta_c_ini = theta_gamma_ini;
+    const double delta_b_ini = delta_c_ini;
+    const double theta_b_ini = theta_gamma_ini;
 
     Perturbations y_ini = (Perturbations) {
         .Phi = Phi_ini,
@@ -572,18 +623,26 @@ Perturbations initial_conditions(Cosmo c, double k) {
         .theta_gamma = theta_gamma_ini,
         .delta_c = delta_c_ini,
         .theta_c = theta_c_ini,
+        .delta_b = delta_b_ini,
+        .theta_b = theta_b_ini,
     };
     return y_ini;
 }
 
 // Solves the Einstein-Boltzmann system for a single value of `k`.
 // Stores the result in `result`, which must be an array of `Perturbations` of size `timesteps+1`
-void solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
+bool solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
     int n_dim = (int)(sizeof(Perturbations)/sizeof(double));
     double tol = 1e-3;
     
     integrator_opt opt1 = get_gsl_integrator(dy_dloga_gsl, tol, n_dim);
     integrator_opt opt2 = get_dverk_integrator(dy_dloga_dverk, tol, n_dim, 1);
+    
+    // DVERK Settings from CMBFAST
+    opt2.d.ind = 2;
+    opt2.d.c[2] = 1e-8;
+    opt2.d.tol = 1e-8;
+
     
     const Perturbations y_ini = initial_conditions(cosmo, k);
     Perturbations state = y_ini;
@@ -594,18 +653,22 @@ void solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
     const double dloga_int = -bg.loga[0]/TIMESTEPS;
     for (int i = 0; i < TIMESTEPS; i++) {
         const double loga_next = loga + dloga_int;
-        integrate(&loga, (double*)&state, &loga_next, &opt2);
+        if (!integrate(&loga, (double*)&state, &loga_next, &opt2)) {
+            fprintf(stderr, "Bolt error: at k = %f, could not integrate perturbation equations from log_a = %f (a = %g) to log_a = %f (a = %g)\n", k, bg.loga[i], bg.a[i], bg.loga[i+1], bg.a[i+1]);
+            return false;
+        }
         result[i + 1] = state;
     }
     
     integrator_free(opt1);
     integrator_free(opt2);
+    return true;
 }
 
 // Bolt has a default array of `k` values in 1/Mpc
 #define LOGK_MIN -3.0
 #define LOGK_MAX 0
-#define NUM_LOGK 100
+#define NUM_LOGK 5
 #define NUM_K NUM_LOGK
 #define dlogk (LOGK_MAX - LOGK_MIN)/(NUM_LOGK-1)
 static_assert(NUM_LOGK > 1);
@@ -614,14 +677,15 @@ static_assert(NUM_LOGK > 1);
 Perturbations transfer_functions[NUM_K][NUM_LOGA];
 double ks[NUM_K];
 
-void calc_transfers(Cosmo *c) {
+bool calc_transfers(Cosmo *c) {
     // TODO: this can be parallelized
     for (size_t i = 0; i < NUM_LOGK; ++i) {
         double logk = LOGK_MIN + i*dlogk;
         double k = pow(10.0, logk);
         ks[i] = k;
-        solve_einstein_boltzmann(*c, k, transfer_functions[i]);
+        if (!solve_einstein_boltzmann(*c, k, transfer_functions[i])) return false;
     }
+    return true;
 }
 
 Array get_matter_tk(double *k, size_t k_len, double *z, size_t z_len) {
@@ -632,7 +696,10 @@ Array get_matter_tk(double *k, size_t k_len, double *z, size_t z_len) {
     // TODO: the `matter_tk_interp` object could be computed during `calc_transfers` like the background
     for (size_t i = 0; i < NUM_K; ++i) {
         for (size_t j = 0; j < NUM_LOGA; ++j) {
-            matter_tk[j*NUM_K + i] = transfer_functions[i][j].delta_c;
+            // matter_tk[j*NUM_K + i] = transfer_functions[i][j].delta_c;
+            const double rho_c_now = rho_c(c_global, bg.a[j]);
+            const double rho_b_now = rho_b(c_global, bg.a[j]);
+            matter_tk[j*NUM_K + i] = (rho_c_now*transfer_functions[i][j].delta_c + rho_b_now*transfer_functions[i][j].delta_b)/(rho_c_now + rho_b_now);
         }
     }
     

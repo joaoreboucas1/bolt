@@ -89,8 +89,8 @@ typedef struct {
  */
 integrator_opt get_dverk_integrator(func_dverk f, double tol, int n, int ind) {
     dverk_opt opt = { .f = f, .tol = tol, .n = n, .ind = ind, .nw = n};
-    opt.c = malloc(DVERK_C_CAPACITY*sizeof(double));
-    opt.w = malloc(DVERK_W_CAPACITY*sizeof(double));
+    opt.c = calloc(DVERK_C_CAPACITY, sizeof(double));
+    opt.w = calloc(DVERK_W_CAPACITY, sizeof(double));
     if (opt.c == NULL || opt.w == NULL) {
         fprintf(stderr, "ERROR: could not allocate memory for DVERK.");
         abort();
