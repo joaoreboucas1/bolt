@@ -5,6 +5,7 @@ LIBS=-lgsl -lgslcblas -lm -lgfortran
 # It is the path containing `libgsl.so.X` and `libgslcblas.so`
 GSL_LIB_PATH=/usr/local/lib
 GSL_INC_PATH=
+GFORTRAN_PATH=/opt/homebrew/lib/gcc/current
 
 BUILD_FOLDER=build
 
@@ -14,7 +15,7 @@ all: $(BUILD_FOLDER)/libbolt.so
 #       Think about how to compile C executables.
 
 $(BUILD_FOLDER)/libbolt.so: $(BUILD_FOLDER)/bolt.o $(BUILD_FOLDER)/dverk.o
-	gcc -shared -o $(BUILD_FOLDER)/libbolt.so $(BUILD_FOLDER)/bolt.o $(BUILD_FOLDER)/dverk.o -I$(GSL_INC_PATH) -L$(GSL_LIB_PATH) -Wl,-rpath,$(GSL_LIB_PATH)/ $(LIBS)
+	gcc -shared -o $(BUILD_FOLDER)/libbolt.so $(BUILD_FOLDER)/bolt.o $(BUILD_FOLDER)/dverk.o -I$(GSL_INC_PATH) -L$(GSL_LIB_PATH) -Wl,-rpath,$(GSL_LIB_PATH)/  -L$(GFORTRAN_PATH) $(LIBS)
 
 $(BUILD_FOLDER)/bolt.o: bolt.c
 	@if ! test -d $(BUILD_FOLDER); then \
@@ -23,7 +24,7 @@ $(BUILD_FOLDER)/bolt.o: bolt.c
 	gcc $(CFLAGS) -c -fpic bolt.c -o $(BUILD_FOLDER)/bolt.o
 
 $(BUILD_FOLDER)/dverk.o: dverk.f
-	gcc -c -fpic dverk.f -o $(BUILD_FOLDER)/dverk.o
+	gfortran -c -fpic dverk.f -o $(BUILD_FOLDER)/dverk.o
 
 .PHONY: test
 test: bolt.c tests/matter_tk.c tests/matter_tk.py tests/distances.c tests/distances.py

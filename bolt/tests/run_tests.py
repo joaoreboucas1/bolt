@@ -26,7 +26,8 @@ class Test():
             "gcc",
             "-o", f"tests/{self.name}",
             f"tests/{self.name}.c",
-            "dverk.f",
+            "build/dverk.o",
+            "-L/opt/homebrew/lib/gcc/current",
             "-lm", "-lgsl", "-lgslcblas", "-ggdb", "-lgfortran"
         ])
         if proc.returncode != 0:

@@ -671,7 +671,7 @@ bool solve_einstein_boltzmann(Cosmo cosmo, double k, Perturbations *result) {
 #define NUM_LOGK 5
 #define NUM_K NUM_LOGK
 #define dlogk (LOGK_MAX - LOGK_MIN)/(NUM_LOGK-1)
-static_assert(NUM_LOGK > 1);
+static_assert(NUM_LOGK > 1, "");
 
 // Buffer to store the result of `compute_transfers`
 Perturbations transfer_functions[NUM_K][NUM_LOGA];

@@ -6,10 +6,13 @@
 
 import os
 import ctypes
+from ctypes.util import find_library
 from typing import *
 import numpy as np
 
-libc = ctypes.CDLL("libc.so.6")
+# libc = ctypes.CDLL("libc.so.6")
+libc_path = find_library("c")
+libc = ctypes.CDLL(libc_path)
 libc.free.argtypes = (ctypes.c_void_p,)
 libc.free.restype = None
 
